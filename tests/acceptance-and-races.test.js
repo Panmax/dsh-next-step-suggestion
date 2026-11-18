@@ -70,8 +70,8 @@ test('Bundle manifest, locales, icon, CSS tokens, and built client.js stay in sy
 
   const detailEn = readFileSync(resolve(rootDir, 'docs/DETAIL.md'), 'utf8').trim()
   const detailZh = readFileSync(resolve(rootDir, 'docs/DETAIL.zh.md'), 'utf8').trim()
-  assert.match(detailEn, /^!\[[^\]]+\]\(preview\.png\)$/)
-  assert.match(detailZh, /^!\[[^\]]+\]\(preview\.zh\.png\)$/)
+  assert.match(detailEn, /^!\[[^\]]+\]\(preview\.svg\)$/)
+  assert.match(detailZh, /^!\[[^\]]+\]\(preview\.zh\.svg\)$/)
 
   const icon = readFileSync(resolve(rootDir, 'icon.svg'), 'utf8')
   assert.match(icon, /viewBox="0 0 36 36"/)
@@ -85,6 +85,19 @@ test('Bundle manifest, locales, icon, CSS tokens, and built client.js stay in sy
     const buf = readFileSync(resolve(rootDir, pngRelPath))
     assert.ok(buf.byteLength > 1024 && buf.byteLength < 1024 * 1024)
     assert.deepEqual(buf.subarray(0, 8), PNG_SIGNATURE)
+    // The PNGs stay high-resolution (>= 2x the 580 CSS px detail-page display size) so retina displays stay sharp.
+    assert.ok(buf.readUInt32BE(16) >= 1160, `${pngRelPath} must be at least 1160px wide`)
+  }
+
+  // Detail pages use self-contained SVG wrappers: intrinsic 580px display size, with the high-res PNG embedded
+  // as a data URI, so the page renders a small-but-crisp image instead of a downscaled bitmap.
+  for (const svgRelPath of ['docs/preview.svg', 'docs/preview.zh.svg']) {
+    const svg = readFileSync(resolve(rootDir, svgRelPath), 'utf8')
+    assert.match(svg, /width="580" height="293"/)
+    assert.match(svg, /viewBox="0 0 1360 688"/)
+    assert.match(svg, /<image href="data:image\/png;base64,[A-Za-z0-9+/=]+"/)
+    assert.doesNotMatch(svg, /<(?:script|style|foreignObject)\b/i)
+    assert.ok(Buffer.byteLength(svg, 'utf8') < 1024 * 1024)
   }
 
   // Client CSS must use theme tokens only (no hardcoded hex/rgb colors).
