@@ -5,7 +5,9 @@ English | [中文](README.zh.md)
 **Codex-style ghost next-step prompt suggestions for DeepSeek Harness Web.**<br />
 When an agent finishes a turn in the active conversation, an empty composer previews one concise, directly sendable follow-up instruction. Press **`Tab`** to accept it as an editable draft, then submit whenever you are ready.
 
-![Next-step suggestion preview: ghost prompt before Tab and editable draft after Tab](docs/preview.png)
+<p align="center">
+  <img src="docs/preview.png" width="580" alt="Next-step suggestion preview: ghost prompt before Tab and editable draft after Tab">
+</p>
 
 ## Features
 
@@ -14,28 +16,14 @@ When an agent finishes a turn in the active conversation, an empty composer prev
 - **Single-shot, bounded background generation** — Dispatches at most one tool-free `ctx.llm` call per `(sessionId, turn)` using only recent human/assistant text and tool-call counts. Full transcripts, system prompts, reasoning traces, and raw tool outputs are never sent, and nothing is written to the session log.
 - **One-shot invalidation & multi-session isolation** — Suggestions are isolated per `sessionId`: switching to another session hides the previous session's preview (never leaking across sessions), while returning to a clean, unconsumed session restores its suggestion or backfills a turn that just completed in the background (skipping cold historical sessions). Typing, IME composition, pasting, pressing **`Esc`**, deleting back to empty, or starting a new turn permanently invalidates that turn's suggestion.
 
-## Preview
-
-<table>
-  <tr>
-    <td align="center">
-      <img src="docs/step-1-ghost.png" width="440" alt="Step 1: Ghost suggestion in empty composer"><br>
-      <sub><b>1. Turn Completed</b> — Gray ghost prompt + <code>Tab</code> badge; draft stays empty and Send remains inactive</sub>
-    </td>
-    <td align="center">
-      <img src="docs/step-2-accepted.png" width="440" alt="Step 2: Editable draft after pressing Tab"><br>
-      <sub><b>2. Press <code>Tab</code></b> — Prompt becomes an editable draft with caret at the end; Send turns active without auto-sending</sub>
-    </td>
-  </tr>
-</table>
-
 ## Installation
 
 ### CLI
 
 ```sh
-# Install from a local checkout
-dsh plugin --profile web add /path/to/dsh-next-step-suggestion
+# Install from GitHub or a local checkout
+dsh plugin --profile web add github:Panmax/dsh-next-step-suggestion
+# or: dsh plugin --profile web add /path/to/dsh-next-step-suggestion
 
 # Enable or disable at any time (hot-reloads with HMR)
 dsh plugin --profile web enable dsh-next-step-suggestion

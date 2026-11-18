@@ -81,10 +81,6 @@ test('Bundle manifest, locales, icon, CSS tokens, and built client.js stay in sy
   for (const pngRelPath of [
     'docs/preview.png',
     'docs/preview.zh.png',
-    'docs/step-1-ghost.png',
-    'docs/step-2-accepted.png',
-    'docs/step-1-ghost.zh.png',
-    'docs/step-2-accepted.zh.png',
   ]) {
     const buf = readFileSync(resolve(rootDir, pngRelPath))
     assert.ok(buf.byteLength > 1024 && buf.byteLength < 1024 * 1024)

@@ -5,7 +5,9 @@
 **面向 DeepSeek Harness Web 的 Codex 风格「下一步建议」插件。**<br />
 当前台会话中的 Agent 正常完成一轮工作且输入框为空时，输入框内会以柔和灰色预览一条简短、可直接发出的后续指令。聚焦输入框按 **`Tab`** 即可将其采纳为可编辑草稿，再按发送键才会发出。
 
-![下一步建议效果对比：按 Tab 前的灰色预览与按 Tab 后的可编辑草稿](docs/preview.zh.png)
+<p align="center">
+  <img src="docs/preview.zh.png" width="580" alt="下一步建议效果对比：按 Tab 前的灰色预览与按 Tab 后的可编辑草稿">
+</p>
 
 ## 核心特性
 
@@ -14,28 +16,14 @@
 - **单回合单次、有界零污染生成** —— 每个正常结束的 `(sessionId, turn)` 最多调用一次无工具 `ctx.llm` 请求，仅提取最近两轮用户消息、本轮最终回复摘要与工具调用计数；绝不上传完整历史、系统提示词、思维链或原始工具日志，不写入会话事件记录。
 - **多会话隔离保留与后台补拉** —— 状态按 `sessionId` 独立隔离：切去其他会话时自动隐藏原会话预览（绝不串台），切回未编辑、未消费的原会话时自动恢复预览，或自动补拉后台刚运行完的最新回合建议（冷启动历史旧会话不会误触发）。开始输入、输入法组合、粘贴、按 **`Esc`**、采纳/输入后删空或开启新回合均会永久作废该轮建议。
 
-## 效果预览
-
-<table>
-  <tr>
-    <td align="center">
-      <img src="docs/step-1-ghost.zh.png" width="440" alt="阶段 1：回合完成后的灰色建议预览"><br>
-      <sub><b>1. 回合正常完成</b> —— 空输入框浮现灰色建议「运行相关回归测试，并总结失败原因」与 <code>Tab</code> 标识，发送按钮保持未激活</sub>
-    </td>
-    <td align="center">
-      <img src="docs/step-2-accepted.zh.png" width="440" alt="阶段 2：按 Tab 采纳为可编辑草稿"><br>
-      <sub><b>2. 按 <code>Tab</code> 接受</b> —— 建议转为深色可编辑草稿、光标移至句尾、发送按钮亮起待发送（聊天流无自动消息）</sub>
-    </td>
-  </tr>
-</table>
-
 ## 安装与管理
 
 ### 命令行（CLI）
 
 ```sh
-# 从本地目录安装到 web Profile
-dsh plugin --profile web add /path/to/dsh-next-step-suggestion
+# 从 GitHub 或本地目录安装到 web Profile
+dsh plugin --profile web add github:Panmax/dsh-next-step-suggestion
+# 或：dsh plugin --profile web add /path/to/dsh-next-step-suggestion
 
 # 随时启用或禁用（HMR 实时热生效）
 dsh plugin --profile web enable dsh-next-step-suggestion
