@@ -259,6 +259,24 @@ export function createClientSuggestionMachine(deps) {
     invalidateSessionTurn(currentEnv?.sessionId ?? activeSessionId)
   }
 
+  /**
+   * Record that a session was observed running in the sidebar session list (even while another session is open),
+   * clearing any stale cached suggestion for that session and arming backfill when the user switches into it.
+   * @param {string} sessionId
+   */
+  function noteSessionRunning(sessionId) {
+    if (disposed || typeof sessionId !== 'string' || sessionId === '') return
+    const slot = slotOf(sessionId)
+    const hadSuggestion = slot.activeSuggestion !== null
+    slot.sawRunning = true
+    slot.baselineDraftRev = null
+    slot.epochInvalidated = true
+    slot.activeSuggestion = null
+    slot.dismissedTurns.delete(UNKNOWN_TURN_KEY)
+    cancelSlotInflight(slot)
+    if (hadSuggestion && activeSessionId === sessionId) notify()
+  }
+
   function startSuggestionFetch(sessionId, slot, env, { requireLiveCompletion }) {
     const turnHint = typeof env.turnHint === 'number' ? env.turnHint : undefined
     const turnKey = turnHint ?? UNKNOWN_TURN_KEY
@@ -398,10 +416,11 @@ export function createClientSuggestionMachine(deps) {
       }
 
       // Backfill if this session completed a turn in the background (either `sawRunning` was armed before
-      // switching away, or Host observed a live `turn/end` while another session was open).
-      const wasSawRunning = slot.sawRunning
-      slot.sawRunning = false
+      // switching away / via sidebar session list, or Host observed a live `turn/end` while another session was open).
+      // Keep `sawRunning` intact if this initial mount frame is not yet foreground-ready.
       if (nextEnv.foreground && !nextEnv.popupOpen) {
+        const wasSawRunning = slot.sawRunning
+        slot.sawRunning = false
         startSuggestionFetch(sessionId, slot, nextEnv, {
           requireLiveCompletion: !wasSawRunning,
         })
@@ -447,13 +466,15 @@ export function createClientSuggestionMachine(deps) {
       return
     }
 
-    // If user returned from Settings/Plugins panel (`foreground: false -> true`) to an idle session
-    // whose turn finished while the panel was open, backfill once.
+    // If user returned from Settings/Plugins panel or initial hydration (`foreground: false -> true`)
+    // to an idle session whose turn finished while non-foreground, backfill once.
     if (prevSlotEnv && !prevSlotEnv.foreground && nextEnv.foreground
       && isSnapshotCleanForSuggestion(nextEnv) && !nextEnv.popupOpen
       && slot.activeSuggestion === null && slot.activeAbort === null) {
+      const wasSawRunning = slot.sawRunning
+      slot.sawRunning = false
       startSuggestionFetch(sessionId, slot, nextEnv, {
-        requireLiveCompletion: true,
+        requireLiveCompletion: !wasSawRunning,
       })
     }
   }
@@ -568,6 +589,7 @@ export function createClientSuggestionMachine(deps) {
   return {
     subscribe,
     sync,
+    noteSessionRunning,
     notifyUserEditIntent,
     isPreviewVisible,
     getVisibleSuggestion,

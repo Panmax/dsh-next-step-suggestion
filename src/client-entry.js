@@ -78,6 +78,25 @@ export function createClientPlugin(React, options = {}) {
         machine.dispose()
       }, 'next-step-suggestion: machine')
 
+      // Observe global sidebar session list so background-running sessions arm `sawRunning` even if never opened yet.
+      ctx.effect(() => {
+        const listStore = (ctx.get?.('sessions') ?? ctx.sessions)?.list
+        if (!listStore || typeof listStore.subscribe !== 'function' || typeof listStore.getSnapshot !== 'function') {
+          return () => {}
+        }
+        const scanRunningSessions = () => {
+          const byId = listStore.getSnapshot()?.byId
+          if (!byId || typeof byId !== 'object') return
+          for (const [id, row] of Object.entries(byId)) {
+            if (row && row.running === true) {
+              machine.noteSessionRunning(id)
+            }
+          }
+        }
+        scanRunningSessions()
+        return listStore.subscribe(scanRunningSessions)
+      }, 'next-step-suggestion: background session observer')
+
       ctx.effect(
         () => ctx.locale.register(LOCALE_NS, LOCALES),
         'next-step-suggestion: dictionaries',

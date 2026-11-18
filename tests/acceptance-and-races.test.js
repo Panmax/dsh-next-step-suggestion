@@ -304,13 +304,17 @@ test('Acceptance 4: Async race guards — typing then deleting to empty, switchi
   machine3.sync(baseEnv({ sessionId: 'session-a', running: false, draft: '', draftRev: 0, turnHint: 1 }))
   assert.equal(machine3.getVisibleSuggestion(), null)
 
-  // Background-running session: user saw session-bg running, left for session-b, then returned after session-bg finished!
-  machine3.sync(baseEnv({ sessionId: 'session-bg', running: true, draftRev: 3, turnHint: 4 }))
-  machine3.sync(baseEnv({ sessionId: 'session-b', running: false, draftRev: 0, turnHint: 5 }))
-  // Now session-bg finished while user was away; user switches back to session-bg -> backfills and displays!
-  machine3.sync(baseEnv({ sessionId: 'session-bg', running: false, draft: '', draftRev: 0, turnHint: 4 }))
+  // Background-running session observed via sidebar list + transient non-foreground mount frame -> still backfills!
+  machine3.noteSessionRunning('session-bg')
+  // Frame 1 on switch: input not hydrated yet (`foreground: false`).
+  machine3.sync(baseEnv({ sessionId: 'session-bg', foreground: false, running: false, draft: '', draftRev: 0, turnHint: 4 }))
+  // Frame 2: hydrated (`foreground: true`) -> preserves `sawRunning` (`requireLiveCompletion === false`) and backfills!
+  machine3.sync(baseEnv({ sessionId: 'session-bg', foreground: true, running: false, draft: '', draftRev: 0, turnHint: 4 }))
   await flushMicrotasks()
   assert.equal(machine3.getVisibleSuggestion(), '检查后台完成的构建产物')
+  const bgCall = fetchLog.find(entry => entry.sid === 'session-bg')
+  assert.ok(bgCall)
+  assert.equal(bgCall.requireLiveCompletion, false)
   machine3.dispose()
 
   // Race 4: Starting a new turn while suggestion request is in flight discards late result.

@@ -7,9 +7,9 @@ export const SUGGESTION_SYSTEM_PROMPT = [
   'Rules:',
   '1. Write strictly from the USER perspective addressing the agent (an imperative instruction or concrete follow-up request), NEVER from the assistant perspective and NEVER an offer or question from the assistant like "Would you like me to..." or "I can...".',
   '2. Match the natural language of the user messages in the conversation (for example, Chinese for Chinese conversations, English for English conversations).',
-  '3. Base the suggestion strictly on the work just completed and concrete unfinished follow-ups mentioned in the latest reply (such as running regression tests, verifying a build, checking edge cases, or committing verified changes).',
+  '3. Base the suggestion on the work just completed: prioritize concrete follow-ups mentioned in the latest reply (such as running regression tests, verifying a build, checking edge cases, committing, or pushing); if the requested change itself is complete, suggest the single most natural concrete verification or next engineering step.',
   '4. Keep it brief and specific on a single line (about 8-32 CJK characters or 4-16 words), plain text only: no quotes, no Markdown formatting, no bullet markers, no leading slash commands, and no explanation.',
-  '5. If the task is cleanly finished, purely conversational, a simple greeting/thanks, or has no clear actionable next step, output ONLY the exact token: NONE',
+  '5. Output ONLY the exact token NONE only when the exchange is a closing pleasantry (e.g. thanks/goodbye), pure small talk, or has no plausible concrete follow-up instruction.',
 ].join('\n')
 
 const SYSTEM_REMINDER_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/giu
