@@ -2,6 +2,11 @@
 
 [English](README.md) | 中文
 
+[![npm version](https://img.shields.io/npm/v/dsh-next-step-suggestion.svg)](https://www.npmjs.com/package/dsh-next-step-suggestion)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-next-step-suggestion.svg)](https://www.npmjs.com/package/dsh-next-step-suggestion)
+[![Publish](https://github.com/Panmax/dsh-next-step-suggestion/actions/workflows/publish.yml/badge.svg)](https://github.com/Panmax/dsh-next-step-suggestion/actions/workflows/publish.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **面向 DeepSeek Harness Web 的 Codex 风格「下一步建议」插件。**<br />
 当前台会话中的 Agent 正常完成一轮工作且输入框为空时，输入框内会以柔和灰色预览一条简短、可直接发出的后续指令。聚焦输入框按 **`Tab`** 即可将其采纳为可编辑草稿，再按发送键才会发出。
 
@@ -21,9 +26,8 @@
 ### 命令行（CLI）
 
 ```sh
-# 从 GitHub 或本地目录安装到 web Profile
-dsh plugin --profile web add github:Panmax/dsh-next-step-suggestion
-# 或：dsh plugin --profile web add /path/to/dsh-next-step-suggestion
+# 从 npm 一键安装到 web Profile
+dsh plugin --profile web add dsh-next-step-suggestion
 
 # 随时启用或禁用（HMR 实时热生效）
 dsh plugin --profile web enable dsh-next-step-suggestion
@@ -36,7 +40,7 @@ dsh plugin --profile web remove dsh-next-step-suggestion
 ### Web 图形界面
 
 1. 打开左侧边栏的 **插件（Plugins）** 页面。
-2. 点击 **添加插件（Add plugin）**，填入本地插件目录路径或仓库地址完成安装。
+2. 点击 **添加插件（Add plugin）**，填入 `dsh-next-step-suggestion` 完成安装。
 3. 可随时切换 **下一步建议** 开关 —— 禁用后将立即注销前端 Slot 与样式、卸载后端路由并中止在途请求，不再发起任何生成请求，也不影响输入框与按键行为。
 
 ## 键盘与交互行为

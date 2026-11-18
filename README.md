@@ -2,6 +2,11 @@
 
 English | [中文](README.zh.md)
 
+[![npm version](https://img.shields.io/npm/v/dsh-next-step-suggestion.svg)](https://www.npmjs.com/package/dsh-next-step-suggestion)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-next-step-suggestion.svg)](https://www.npmjs.com/package/dsh-next-step-suggestion)
+[![Publish](https://github.com/Panmax/dsh-next-step-suggestion/actions/workflows/publish.yml/badge.svg)](https://github.com/Panmax/dsh-next-step-suggestion/actions/workflows/publish.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **Codex-style ghost next-step prompt suggestions for DeepSeek Harness Web.**<br />
 When an agent finishes a turn in the active conversation, an empty composer previews one concise, directly sendable follow-up instruction. Press **`Tab`** to accept it as an editable draft, then submit whenever you are ready.
 
@@ -21,9 +26,8 @@ When an agent finishes a turn in the active conversation, an empty composer prev
 ### CLI
 
 ```sh
-# Install from GitHub or a local checkout
-dsh plugin --profile web add github:Panmax/dsh-next-step-suggestion
-# or: dsh plugin --profile web add /path/to/dsh-next-step-suggestion
+# Install from npm
+dsh plugin --profile web add dsh-next-step-suggestion
 
 # Enable or disable at any time (hot-reloads with HMR)
 dsh plugin --profile web enable dsh-next-step-suggestion
@@ -36,7 +40,7 @@ dsh plugin --profile web remove dsh-next-step-suggestion
 ### Web UI
 
 1. Open **Plugins** in the left sidebar.
-2. Click **Add plugin** and supply the package path or repository URL.
+2. Click **Add plugin**, enter `dsh-next-step-suggestion`, and install.
 3. Toggle **Next-step suggestion** on or off at any time—disabling unmounts the overlay slot, removes plugin styles, and stops all background generation requests immediately.
 
 ## Keyboard & Interaction Matrix
