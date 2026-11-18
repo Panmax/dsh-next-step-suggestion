@@ -213,6 +213,8 @@ export function createSuggestionCoordinator(ctx, rawConfig = {}) {
   const settled = new Map()
   /** @type {Map<string, { sessionId: string, turn: number, abortController: AbortController, invalidated: boolean, promise: Promise<{ status: string, turn: number | null, suggestion: string | null, reason?: string }> }>} */
   const inflight = new Map()
+  /** @type {Map<string, number>} Latest turn observed completing live per session (enables background-turn backfill without firing on cold historical sessions). */
+  const liveCompletedTurns = new Map()
   let disposed = false
 
   function recordSettled(key, entry) {
@@ -225,7 +227,23 @@ export function createSuggestionCoordinator(ctx, rawConfig = {}) {
     }
   }
 
+  function markLiveTurnCompleted(sessionId, turn) {
+    if (disposed || typeof sessionId !== 'string' || typeof turn !== 'number') return
+    if (liveCompletedTurns.has(sessionId)) liveCompletedTurns.delete(sessionId)
+    liveCompletedTurns.set(sessionId, turn)
+    while (liveCompletedTurns.size > MAX_SETTLED_ENTRIES) {
+      const oldest = liveCompletedTurns.keys().next().value
+      if (oldest === undefined) break
+      liveCompletedTurns.delete(oldest)
+    }
+  }
+
+  function clearLiveTurnCompleted(sessionId) {
+    liveCompletedTurns.delete(sessionId)
+  }
+
   function abortSessionInflight(sessionId) {
+    clearLiveTurnCompleted(sessionId)
     for (const [key, active] of inflight.entries()) {
       if (active.sessionId === sessionId) {
         active.invalidated = true
@@ -237,6 +255,7 @@ export function createSuggestionCoordinator(ctx, rawConfig = {}) {
 
   function purgeSession(sessionId) {
     abortSessionInflight(sessionId)
+    clearLiveTurnCompleted(sessionId)
     for (const [key, entry] of settled.entries()) {
       if (entry.sessionId === sessionId) settled.delete(key)
     }
@@ -250,14 +269,16 @@ export function createSuggestionCoordinator(ctx, rawConfig = {}) {
     }
     inflight.clear()
     settled.clear()
+    liveCompletedTurns.clear()
   }
 
   /**
    * Request or retrieve the single suggestion for a session's latest completed turn.
    * @param {string} sessionId
    * @param {number | undefined} expectedTurn
+   * @param {{ requireLiveCompletion?: boolean }} [options]
    */
-  async function suggest(sessionId, expectedTurn) {
+  async function suggest(sessionId, expectedTurn, options = {}) {
     if (disposed || typeof sessionId !== 'string' || sessionId.trim() === '') {
       return { status: 'ineligible', turn: null, suggestion: null, reason: 'invalid-session' }
     }
@@ -299,6 +320,10 @@ export function createSuggestionCoordinator(ctx, rawConfig = {}) {
     const runningCall = inflight.get(cacheKey)
     if (runningCall !== undefined) {
       return await runningCall.promise
+    }
+
+    if (options.requireLiveCompletion === true && liveCompletedTurns.get(sessionId) !== turn) {
+      return { status: 'ineligible', turn, suggestion: null, reason: 'historical-turn' }
     }
 
     const llm = getService(ctx, 'llm')
@@ -372,11 +397,13 @@ export function createSuggestionCoordinator(ctx, rawConfig = {}) {
   return {
     config,
     suggest,
+    markLiveTurnCompleted,
+    clearLiveTurnCompleted,
     abortSessionInflight,
     purgeSession,
     dispose,
     /** Read-only inspection counts for tests. */
-    stats: () => ({ settled: settled.size, inflight: inflight.size, disposed }),
+    stats: () => ({ settled: settled.size, inflight: inflight.size, liveCompleted: liveCompletedTurns.size, disposed }),
   }
 }
 
@@ -455,7 +482,7 @@ export function createSuggestRouteHandler(ctx, coordinator) {
       return
     }
 
-    const { sessionId, expectedTurn } = bodyResult.value
+    const { sessionId, expectedTurn, requireLiveCompletion } = bodyResult.value
     if (typeof sessionId !== 'string' || sessionId.trim() === '') {
       sendJson(res, 400, { code: 'bad-request', message: 'sessionId must be a non-empty string' })
       return
@@ -466,7 +493,9 @@ export function createSuggestRouteHandler(ctx, coordinator) {
       return
     }
 
-    const outcome = await coordinator.suggest(sessionId, expectedTurn ?? undefined)
+    const outcome = await coordinator.suggest(sessionId, expectedTurn ?? undefined, {
+      requireLiveCompletion: requireLiveCompletion === true,
+    })
     sendJson(res, 200, outcome)
   }
 }

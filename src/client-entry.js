@@ -47,7 +47,7 @@ export function createClientPlugin(React, options = {}) {
   const h = React.createElement
   const fetchFn = options.fetchImpl ?? ((...args) => globalThis.fetch(...args))
 
-  function requestSuggestionFromHost(sessionId, expectedTurn, signal) {
+  function requestSuggestionFromHost(sessionId, expectedTurn, signal, reqOptions) {
     return fetchFn(SUGGEST_ENDPOINT, {
       method: 'POST',
       credentials: 'same-origin',
@@ -55,6 +55,7 @@ export function createClientPlugin(React, options = {}) {
       body: JSON.stringify({
         sessionId,
         ...(typeof expectedTurn === 'number' ? { expectedTurn } : {}),
+        ...(reqOptions?.requireLiveCompletion === true ? { requireLiveCompletion: true } : {}),
       }),
       signal,
     }).then((res) => {
@@ -67,6 +68,16 @@ export function createClientPlugin(React, options = {}) {
     name: 'next-step-suggestion',
     inject: ['slots', 'locale'],
     apply(ctx) {
+      // Plugin-scoped state machine survives session-slot unmount/remount across session switches
+      // and disposes cleanly when the plugin itself is disabled or hot-reloaded.
+      const machine = createClientSuggestionMachine({
+        fetchSuggestion: requestSuggestionFromHost,
+      })
+
+      ctx.effect(() => () => {
+        machine.dispose()
+      }, 'next-step-suggestion: machine')
+
       ctx.effect(
         () => ctx.locale.register(LOCALE_NS, LOCALES),
         'next-step-suggestion: dictionaries',
@@ -101,18 +112,9 @@ export function createClientPlugin(React, options = {}) {
         const [, forceRender] = React.useReducer(c => c + 1, 0)
         const [topOffset, setTopOffset] = React.useState(8)
 
-        const machineRef = React.useRef(null)
-        if (machineRef.current === null) {
-          machineRef.current = createClientSuggestionMachine({
-            fetchSuggestion: requestSuggestionFromHost,
-            onChange: () => { forceRender() },
-          })
-        }
-        const machine = machineRef.current
-
-        React.useEffect(() => () => {
-          machine.dispose()
-        }, [machine])
+        React.useEffect(() => machine.subscribe(() => {
+          forceRender()
+        }), [])
 
         // Subscribe to optional trigger & command popup stores for this session.
         const sessionStores = React.useMemo(() => {
@@ -185,6 +187,9 @@ export function createClientPlugin(React, options = {}) {
           turnHint,
         }
 
+        const envRef = React.useRef(envSnapshot)
+        envRef.current = envSnapshot
+
         // Synchronize environment snapshot after commit and bind DOM listeners on composer card & editor.
         React.useEffect(() => {
           machine.sync(envSnapshot)
@@ -217,7 +222,7 @@ export function createClientPlugin(React, options = {}) {
           const findEditor = () => card.querySelector?.('[data-input-scroll] [contenteditable]') ?? null
 
           const onEditIntent = () => {
-            machine.notifyUserEditIntent()
+            machine.notifyUserEditIntent(envRef.current.sessionId)
           }
 
           const onKeyDown = (ev) => {
@@ -226,10 +231,10 @@ export function createClientPlugin(React, options = {}) {
             const isEditorFocused = Boolean(
               editor && active && (active === editor || (typeof editor.contains === 'function' && editor.contains(active))),
             )
-            // Re-check live DOM overlay presence synchronously before consuming keys.
             if (hasOtherOverlayElements(anchorRef.current)) return
             machine.handleKeyDown(ev, {
               isEditorFocused,
+              liveEnv: envRef.current,
               acceptDraft: (acceptedText) => {
                 const actions = inputActionsRef.current
                 if (!actions || typeof actions.setDraft !== 'function') return
@@ -252,7 +257,7 @@ export function createClientPlugin(React, options = {}) {
             card.removeEventListener('drop', onEditIntent, true)
             card.removeEventListener('keydown', onKeyDown, false)
           }
-        }, [machine, sessionId])
+        }, [sessionId])
 
         const suggestionText = machine.getVisibleSuggestion(envSnapshot)
         const translate = typeof t === 'function' ? t : ((key, vars) => {

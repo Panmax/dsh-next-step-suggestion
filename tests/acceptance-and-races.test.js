@@ -264,30 +264,53 @@ test('Acceptance 4: Async race guards — typing then deleting to empty, switchi
   assert.equal(machine2.getVisibleSuggestion(), null)
   machine2.dispose()
 
-  // Race 3: Session switch while request is in flight aborts signal and never leaks onto session-b or back onto session-a.
-  let observedSignal = null
-  let resolveSlow3
+  // Race 3: Multi-session switching — never leaks onto session-b, preserves unconsumed suggestion on return to session-a
+  // (even if InputHub recreates SessionInputShell with draftRev=0), and backfills turns that finished in background!
+  let resolveSlowA
+  const fetchLog = []
   const machine3 = createClientSuggestionMachine({
-    fetchSuggestion: (_sid, _turn, signal) => {
-      observedSignal = signal
-      return new Promise((resolvePromise) => { resolveSlow3 = resolvePromise })
+    fetchSuggestion: (sid, turn, _signal, options) => {
+      fetchLog.push({ sid, turn, requireLiveCompletion: Boolean(options?.requireLiveCompletion) })
+      if (sid === 'session-a') {
+        return new Promise((resolvePromise) => { resolveSlowA = resolvePromise })
+      }
+      if (sid === 'session-bg') {
+        return Promise.resolve({ status: 'ready', turn: turn ?? 4, suggestion: '检查后台完成的构建产物' })
+      }
+      // Historical cold session-b returns ineligible from Host when requireLiveCompletion=true.
+      return Promise.resolve({ status: 'ineligible', turn: turn ?? 5, suggestion: null, reason: 'historical-turn' })
     },
   })
-  machine3.sync(baseEnv({ sessionId: 'session-a', running: true, turnHint: 1 }))
-  machine3.sync(baseEnv({ sessionId: 'session-a', running: false, turnHint: 1 }))
-  assert.equal(observedSignal.aborted, false)
+  machine3.sync(baseEnv({ sessionId: 'session-a', running: true, draftRev: 15, turnHint: 1 }))
+  machine3.sync(baseEnv({ sessionId: 'session-a', running: false, draftRev: 15, turnHint: 1 }))
 
-  // Switch to session-b.
-  machine3.sync(baseEnv({ sessionId: 'session-b', running: false, turnHint: 5 }))
-  assert.equal(observedSignal.aborted, true)
+  // Switch to historical session-b while session-a's request is still in flight.
+  machine3.sync(baseEnv({ sessionId: 'session-b', running: false, draftRev: 0, turnHint: 5 }))
 
-  resolveSlow3({ status: 'ready', turn: 1, suggestion: '不该串台到会话B的建议' })
+  // session-a resolves in the background -> MUST NOT leak onto session-b!
+  resolveSlowA({ status: 'ready', turn: 1, suggestion: '仅属于会话A的建议' })
   await flushMicrotasks()
   assert.equal(machine3.getVisibleSuggestion(), null)
 
-  // Switching back to idle session-a also does not resurrect stale suggestion.
-  machine3.sync(baseEnv({ sessionId: 'session-a', running: false, turnHint: 1 }))
+  // Return to idle, clean session-a (with freshly mounted SessionInputShell `draftRev: 0`) -> suggestion is preserved!
+  machine3.sync(baseEnv({ sessionId: 'session-a', running: false, draft: '', draftRev: 0, turnHint: 1 }))
+  assert.equal(machine3.getVisibleSuggestion(), '仅属于会话A的建议')
+
+  // Consume/invalidate in session-a (type then delete to empty), switch away and return -> stays permanently gone!
+  machine3.sync(baseEnv({ sessionId: 'session-a', running: false, draft: 'z', draftRev: 1, turnHint: 1 }))
+  machine3.sync(baseEnv({ sessionId: 'session-a', running: false, draft: '', draftRev: 2, turnHint: 1 }))
   assert.equal(machine3.getVisibleSuggestion(), null)
+  machine3.sync(baseEnv({ sessionId: 'session-b', running: false, draft: '', draftRev: 0, turnHint: 5 }))
+  machine3.sync(baseEnv({ sessionId: 'session-a', running: false, draft: '', draftRev: 0, turnHint: 1 }))
+  assert.equal(machine3.getVisibleSuggestion(), null)
+
+  // Background-running session: user saw session-bg running, left for session-b, then returned after session-bg finished!
+  machine3.sync(baseEnv({ sessionId: 'session-bg', running: true, draftRev: 3, turnHint: 4 }))
+  machine3.sync(baseEnv({ sessionId: 'session-b', running: false, draftRev: 0, turnHint: 5 }))
+  // Now session-bg finished while user was away; user switches back to session-bg -> backfills and displays!
+  machine3.sync(baseEnv({ sessionId: 'session-bg', running: false, draft: '', draftRev: 0, turnHint: 4 }))
+  await flushMicrotasks()
+  assert.equal(machine3.getVisibleSuggestion(), '检查后台完成的构建产物')
   machine3.dispose()
 
   // Race 4: Starting a new turn while suggestion request is in flight discards late result.

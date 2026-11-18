@@ -24,6 +24,22 @@ export function apply(ctx, config) {
     coordinator.dispose()
   }, 'next-step-suggestion: coordinator lifecycle')
 
+  ctx.on('session/event', (session, event) => {
+    const sessionId = session?.id
+    if (typeof sessionId !== 'string' || session?.header?.origin === 'subagent') return
+    if (event?.type === 'turn/start') {
+      coordinator.abortSessionInflight(sessionId)
+      return
+    }
+    if (event?.type === 'turn/end') {
+      if (event.data?.reason?.kind === 'completed' && typeof event.data.turn === 'number') {
+        coordinator.markLiveTurnCompleted(sessionId, event.data.turn)
+      } else {
+        coordinator.clearLiveTurnCompleted(sessionId)
+      }
+    }
+  })
+
   ctx.on('agent/status', (payload) => {
     if (payload?.status === 'running' && typeof payload?.agent?.id === 'string') {
       coordinator.abortSessionInflight(payload.agent.id)

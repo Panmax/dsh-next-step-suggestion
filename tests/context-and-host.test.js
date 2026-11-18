@@ -374,3 +374,52 @@ test('Host plugin route enforces auth, method/media-type checks, and cleans up o
   for (const cleanup of effects.splice(0)) cleanup()
   assert.equal(routes.has(SUGGEST_ROUTE_PATH), false)
 })
+
+test('requireLiveCompletion skips cold historical sessions while allowing background-completed live turns', async () => {
+  let llmCalls = 0
+  const agent = {
+    id: 'sess-bg',
+    status: 'idle',
+    inbox: { nextTurn: [], nextStep: [] },
+    model: { current: () => ({ provider: 'mock', model: 'fast' }) },
+    session: {
+      id: 'sess-bg',
+      header: {},
+      snapshotEvents: () => buildCompletedSessionEvents({ turn: 2 }),
+    },
+  }
+
+  const ctx = {
+    agents: { get: id => (id === 'sess-bg' ? agent : undefined) },
+    llm: {
+      async prepareCall(config) {
+        llmCalls += 1
+        return {
+          config,
+          async *stream() {
+            yield { type: 'text-delta', index: 0, text: '查看后台任务的变更摘要' }
+            yield { type: 'finish', reason: { kind: 'stop' } }
+          },
+        }
+      },
+    },
+  }
+
+  const coordinator = createSuggestionCoordinator(ctx, { timeoutMs: 2000 })
+
+  // Cold historical session never observed completing live -> skipped with 0 LLM calls.
+  const cold = await coordinator.suggest('sess-bg', 2, { requireLiveCompletion: true })
+  assert.equal(cold.status, 'ineligible')
+  assert.equal(cold.reason, 'historical-turn')
+  assert.equal(llmCalls, 0)
+
+  // Once Host observes a live `turn/end` (`completed`) for turn 2, background backfill succeeds!
+  coordinator.markLiveTurnCompleted('sess-bg', 2)
+  const backfilled = await coordinator.suggest('sess-bg', 2, { requireLiveCompletion: true })
+  assert.equal(llmCalls, 1)
+  assert.deepEqual(backfilled, {
+    status: 'ready',
+    turn: 2,
+    suggestion: '查看后台任务的变更摘要',
+  })
+})
