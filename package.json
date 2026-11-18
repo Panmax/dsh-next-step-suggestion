@@ -15,7 +15,9 @@
   "type": "module",
   "icon": "./icon.svg",
   "keywords": [
+    "dsh-plugin",
     "deepseek-harness",
+    "cordis-plugin",
     "dsh",
     "cordis",
     "plugin",
