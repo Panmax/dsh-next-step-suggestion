@@ -47,7 +47,7 @@ dsh plugin --profile web remove dsh-next-step-suggestion
 
 | Context | Action | Result |
 | --- | --- | --- |
-| Preview visible + composer focused + no popup open | `Tab` | Accepts suggestion into editable draft, moves caret to end, does **not** send |
+| Preview visible + composer focused + no popup open | `Tab` / `→` (`ArrowRight`) | Accepts suggestion into editable draft, moves caret to end, does **not** send |
 | Preview visible + no popup open (mouse or touch) | Click / tap `Tab` badge | Accepts suggestion into editable draft, focuses composer, does **not** send |
 | Preview visible + composer focused + no popup open | `Esc` | Dismisses and invalidates the current turn's preview |
 | Preview visible + focus outside composer | `Tab` | Preserves native browser focus traversal |
@@ -56,7 +56,7 @@ dsh plugin --profile web remove dsh-next-step-suggestion
 
 ## Configuration
 
-Optional fields under the `next-step-suggestion` entry in `cordis.patch.yml`:
+Configure directly in **Plugins → Next-step suggestion** (select whether to follow the active session's model or pin a dedicated lightweight provider/model, plus collapsible advanced limits), or set optional fields under the `next-step-suggestion` entry in `cordis.patch.yml`:
 
 ```yaml
 - insert:

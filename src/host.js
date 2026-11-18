@@ -5,6 +5,7 @@
 import { extractTurnContext, parseSuggestionOutput, SUGGESTION_SYSTEM_PROMPT } from './context.js'
 
 export const SUGGEST_ROUTE_PATH = '/api/next-step-suggestion/suggest'
+export const CONFIG_ROUTE_PATH = '/api/next-step-suggestion/config'
 
 const DEFAULT_MAX_INPUT_BYTES = 6000
 const DEFAULT_MAX_OUTPUT_TOKENS = 4096
@@ -12,14 +13,34 @@ const DEFAULT_TIMEOUT_MS = 30000
 const MAX_TIMEOUT_MS = 300_000
 const MAX_SETTLED_ENTRIES = 200
 const MAX_REQUEST_BODY_BYTES = 16 * 1024
+const CATALOG_PROVIDER_TIMEOUT_MS = 3000
+
+export const DEFAULT_HOST_CONFIG = Object.freeze({
+  maxInputBytes: DEFAULT_MAX_INPUT_BYTES,
+  maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+  timeoutMs: DEFAULT_TIMEOUT_MS,
+})
+
+const CONFIG_KEYS = new Set([
+  'maxInputBytes',
+  'maxOutputTokens',
+  'timeoutMs',
+  'provider',
+  'model',
+])
 
 /**
- * Validate and resolve plugin configuration with explicit defaults.
+ * Validate and resolve plugin configuration with explicit defaults and strict key whitelist.
  * @param {Record<string, unknown> | undefined} raw
  */
 export function resolveHostConfig(raw = {}) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('dsh-next-step-suggestion: config must be an object')
+  }
+  for (const key of Object.keys(raw)) {
+    if (!CONFIG_KEYS.has(key)) {
+      throw new Error(`dsh-next-step-suggestion: unknown config key "${key}"`)
+    }
   }
   const maxInputBytes = raw.maxInputBytes ?? DEFAULT_MAX_INPUT_BYTES
   const maxOutputTokens = raw.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS
@@ -54,6 +75,23 @@ export function resolveHostConfig(raw = {}) {
     ...(hasProvider ? { provider: raw.provider.trim(), model: raw.model.trim() } : {}),
   })
 }
+
+/**
+ * Zero-dependency Standard Schema v1 validator for Cordis Loader & ConfigEditor.
+ */
+export const HostConfigSchema = Object.freeze({
+  '~standard': Object.freeze({
+    version: 1,
+    vendor: 'dsh-next-step-suggestion',
+    validate(input) {
+      try {
+        return { value: resolveHostConfig(input) }
+      } catch (err) {
+        return { issues: [{ message: err instanceof Error ? err.message : String(err) }] }
+      }
+    },
+  }),
+})
 
 /**
  * Resolve optional or injected service from Cordis context.
@@ -97,17 +135,65 @@ export function resolveModelRoute(ctx, agent, config) {
   return null
 }
 
+function isDescendantOfSession(agentsSvc, candidateAgent, targetSessionId) {
+  if (!candidateAgent || !candidateAgent.session) return false
+  const visited = new Set([candidateAgent.id])
+  let header = candidateAgent.session.header
+  while (header?.origin === 'subagent' && typeof header.parentSession === 'string' && !visited.has(header.parentSession)) {
+    const parentId = header.parentSession
+    if (parentId === targetSessionId) return true
+    visited.add(parentId)
+    const parentAgent = agentsSvc?.get?.(parentId)
+    if (!parentAgent?.session) break
+    header = parentAgent.session.header
+  }
+  return false
+}
+
+function hasRunningDescendantSubagent(ctx, sessionId) {
+  const agentsSvc = getService(ctx, 'agents')
+  const allAgents = typeof agentsSvc?.list === 'function' ? agentsSvc.list() : null
+  if (!Array.isArray(allAgents)) return false
+  return allAgents.some(
+    candidate => candidate && candidate.id !== sessionId && candidate.status === 'running'
+      && isDescendantOfSession(agentsSvc, candidate, sessionId),
+  )
+}
+
+function hasRunningSessionJob(ctx, sessionId) {
+  const jobsSvc = getService(ctx, 'jobs')
+  if (typeof jobsSvc?.list !== 'function') return false
+  const jobs = jobsSvc.list(sessionId)
+  return Array.isArray(jobs) && jobs.some(job => job && (job.status === 'running' || job.status === 'stopping'))
+}
+
 /**
- * Check whether an agent is currently idle in a foreground-eligible session with no queued input.
+ * Check whether an agent is currently idle in a foreground-eligible session with no queued input
+ * and no active background subagents, background jobs, or armed goal continuations.
+ * @param {any} ctx
  * @param {any} agent
  * @returns {{ ok: true } | { ok: false, reason: string }}
  */
-function checkAgentIdle(agent) {
+function checkAgentIdle(ctx, agent) {
   if (!agent || !agent.session) return { ok: false, reason: 'agent-not-found' }
   if (agent.session.header?.origin === 'subagent') return { ok: false, reason: 'subagent' }
   if (agent.status !== 'idle') return { ok: false, reason: 'agent-running' }
   if ((agent.inbox?.nextTurn?.length ?? 0) > 0 || (agent.inbox?.nextStep?.length ?? 0) > 0) {
     return { ok: false, reason: 'inbox-pending' }
+  }
+  if (hasRunningDescendantSubagent(ctx, agent.id)) {
+    return { ok: false, reason: 'subagent-running' }
+  }
+  if (hasRunningSessionJob(ctx, agent.id)) {
+    return { ok: false, reason: 'background-job-running' }
+  }
+  try {
+    const goalView = getService(ctx, 'goal')?.get?.(agent)
+    if (goalView?.goal?.phase === 'active' && goalView?.activation === 'armed') {
+      return { ok: false, reason: 'goal-active' }
+    }
+  } catch {
+    // Ignore optional goal service lookup errors on mock agents.
   }
   return { ok: true }
 }
@@ -208,7 +294,7 @@ async function runSuggestionLlmCall(llm, route, promptInput, config, signal) {
  * @param {Record<string, unknown> | undefined} rawConfig
  */
 export function createSuggestionCoordinator(ctx, rawConfig = {}) {
-  const config = resolveHostConfig(rawConfig)
+  let config = resolveHostConfig(rawConfig)
   /** @type {Map<string, { sessionId: string, turn: number, suggestion: string | null }>} */
   const settled = new Map()
   /** @type {Map<string, { sessionId: string, turn: number, abortController: AbortController, invalidated: boolean, promise: Promise<{ status: string, turn: number | null, suggestion: string | null, reason?: string }> }>} */
@@ -285,7 +371,7 @@ export function createSuggestionCoordinator(ctx, rawConfig = {}) {
 
     const agents = getService(ctx, 'agents')
     const agent = agents?.get?.(sessionId)
-    const idleCheck = checkAgentIdle(agent)
+    const idleCheck = checkAgentIdle(ctx, agent)
     if (!idleCheck.ok) {
       return { status: 'ineligible', turn: null, suggestion: null, reason: idleCheck.reason }
     }
@@ -368,7 +454,7 @@ export function createSuggestionCoordinator(ctx, rawConfig = {}) {
 
       // Re-verify session and turn state after async LLM completion.
       const currentAgent = getService(ctx, 'agents')?.get?.(sessionId)
-      if (!checkAgentIdle(currentAgent).ok) {
+      if (!checkAgentIdle(ctx, currentAgent).ok) {
         return { status: 'stale', turn, suggestion: null, reason: 'session-advanced' }
       }
       let latestEvents
@@ -394,8 +480,18 @@ export function createSuggestionCoordinator(ctx, rawConfig = {}) {
     return await record.promise
   }
 
+  function updateConfig(nextConfig) {
+    const resolved = resolveHostConfig(nextConfig)
+    config = resolved
+    settled.clear()
+    return resolved
+  }
+
   return {
-    config,
+    get config() {
+      return config
+    },
+    updateConfig,
     suggest,
     markLiveTurnCompleted,
     clearLiveTurnCompleted,
@@ -497,5 +593,186 @@ export function createSuggestRouteHandler(ctx, coordinator) {
       requireLiveCompletion: requireLiveCompletion === true,
     })
     sendJson(res, 200, outcome)
+  }
+}
+
+async function listModelsWithTimeout(llm, providerId) {
+  if (typeof llm?.listModels !== 'function') return []
+  let timer = null
+  try {
+    const models = await Promise.race([
+      Promise.resolve(llm.listModels(providerId)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('CATALOG_TIMEOUT')), CATALOG_PROVIDER_TIMEOUT_MS)
+        timer.unref?.()
+      }),
+    ])
+    if (!Array.isArray(models)) return []
+    return models
+      .filter(m => m && typeof m.id === 'string' && m.id.trim() !== '')
+      .map(m => ({
+        id: m.id,
+        name: typeof m.name === 'string' && m.name.trim() !== '' ? m.name : m.id,
+      }))
+  } catch {
+    return []
+  } finally {
+    if (timer !== null) clearTimeout(timer)
+  }
+}
+
+async function listProviderCatalog(ctx) {
+  const llm = getService(ctx, 'llm')
+  const rawProviders = typeof llm?.listProviders === 'function' ? llm.listProviders() : []
+  if (!Array.isArray(rawProviders) || rawProviders.length === 0) return []
+
+  const validProviders = rawProviders.filter(
+    p => p && typeof p.id === 'string' && p.id.trim() !== '',
+  )
+  return await Promise.all(
+    validProviders.map(async (p) => {
+      const models = await listModelsWithTimeout(llm, p.id)
+      return {
+        id: p.id,
+        name: typeof p.name === 'string' && p.name.trim() !== '' ? p.name : p.id,
+        models,
+      }
+    }),
+  )
+}
+
+function serializeResolvedConfig(resolved) {
+  return {
+    maxInputBytes: resolved.maxInputBytes,
+    maxOutputTokens: resolved.maxOutputTokens,
+    timeoutMs: resolved.timeoutMs,
+    provider: resolved.provider ?? null,
+    model: resolved.model ?? null,
+  }
+}
+
+/**
+ * Create the authenticated `GET` / `POST` configuration & model-catalog route handler
+ * registered on `ctx.webServer` at `/api/next-step-suggestion/config`.
+ *
+ * @param {any} ctx
+ * @param {ReturnType<typeof createSuggestionCoordinator>} coordinator
+ */
+export function createConfigRouteHandler(ctx, coordinator) {
+  return async function handleConfigRequest(req, res) {
+    const connection = getService(ctx, 'connection')
+    if (connection && typeof connection.requestRejection === 'function') {
+      const rejection = connection.requestRejection(req)
+      if (rejection !== undefined) {
+        sendJson(res, rejection, { code: 'unauthorized', message: 'request rejected' })
+        return
+      }
+    }
+
+    if (req.method === 'GET') {
+      const entry = ctx?.fiber?.entry
+      const editor = getService(ctx, 'configEditor')
+      const editable = Boolean(
+        entry !== undefined
+        && typeof editor?.edit === 'function'
+        && (typeof editor.entries !== 'function' || editor.entries().includes(entry)),
+      )
+      const providers = await listProviderCatalog(ctx)
+      const defaultSelection = getService(ctx, 'agentDefaultModel')?.currentSelection?.()
+      const defaultRoute = defaultSelection
+        && typeof defaultSelection.provider === 'string' && defaultSelection.provider.length > 0
+        && typeof defaultSelection.model === 'string' && defaultSelection.model.length > 0
+        ? { provider: defaultSelection.provider, model: defaultSelection.model }
+        : null
+
+      sendJson(res, 200, {
+        config: serializeResolvedConfig(coordinator.config),
+        defaults: DEFAULT_HOST_CONFIG,
+        maxTimeoutMs: MAX_TIMEOUT_MS,
+        editable,
+        providers,
+        defaultRoute,
+      })
+      return
+    }
+
+    if (req.method !== 'POST') {
+      res.statusCode = 405
+      res.setHeader('allow', 'GET, POST')
+      res.end()
+      return
+    }
+
+    const mediaType = String(req.headers?.['content-type'] ?? '').split(';', 1)[0]?.trim().toLowerCase()
+    if (mediaType !== 'application/json') {
+      sendJson(res, 415, { code: 'unsupported-media-type', message: 'content-type must be application/json' })
+      return
+    }
+
+    let bodyResult
+    try {
+      bodyResult = await readBoundedJsonBody(req)
+    } catch {
+      sendJson(res, 400, { code: 'bad-request', message: 'unreadable request body' })
+      return
+    }
+
+    if ('error' in bodyResult) {
+      sendJson(res, bodyResult.status, { code: bodyResult.error })
+      return
+    }
+
+    const rawBody = bodyResult.value
+    const candidate = {}
+    for (const [k, v] of Object.entries(rawBody)) {
+      if ((k === 'provider' || k === 'model') && v === null) continue
+      candidate[k] = v
+    }
+
+    let resolved
+    try {
+      resolved = resolveHostConfig(candidate)
+    } catch (err) {
+      sendJson(res, 400, {
+        code: 'invalid-config',
+        message: err instanceof Error ? err.message : String(err),
+      })
+      return
+    }
+
+    const entry = ctx?.fiber?.entry
+    const editor = getService(ctx, 'configEditor')
+    if (entry === undefined || typeof editor?.edit !== 'function') {
+      sendJson(res, 409, {
+        code: 'config-editor-unavailable',
+        message: 'Configuration cannot be saved in this profile',
+      })
+      return
+    }
+
+    const persistedRaw = {
+      maxInputBytes: resolved.maxInputBytes,
+      maxOutputTokens: resolved.maxOutputTokens,
+      timeoutMs: resolved.timeoutMs,
+      ...(resolved.provider !== undefined && resolved.model !== undefined
+        ? { provider: resolved.provider, model: resolved.model }
+        : {}),
+    }
+
+    try {
+      await editor.edit(entry, () => ({ ...persistedRaw }))
+    } catch (err) {
+      sendJson(res, 409, {
+        code: 'save-rejected',
+        message: err instanceof Error ? err.message : String(err),
+      })
+      return
+    }
+
+    coordinator.updateConfig(persistedRaw)
+    sendJson(res, 200, {
+      ok: true,
+      config: serializeResolvedConfig(resolved),
+    })
   }
 }

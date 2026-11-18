@@ -9,13 +9,14 @@ export const SUGGESTION_SYSTEM_PROMPT = [
   '2. Match the natural language of the user messages in the conversation (for example, Chinese for Chinese conversations, English for English conversations).',
   '3. Base the suggestion on the work just completed: prioritize concrete follow-ups mentioned in the latest reply (such as running regression tests, verifying a build, checking edge cases, committing, or pushing); if the requested change itself is complete, suggest the single most natural concrete verification or next engineering step.',
   '4. Keep it brief and specific on a single line (about 8-32 CJK characters or 4-16 words), plain text only: no quotes, no Markdown formatting, no bullet markers, no leading slash commands, and no explanation.',
-  '5. Output ONLY the exact token NONE only when the exchange is a closing pleasantry (e.g. thanks/goodbye), pure small talk, or has no plausible concrete follow-up instruction.',
+  '5. Output ONLY the exact token NONE when the exchange is a closing pleasantry (e.g. thanks/goodbye), pure small talk, when the assistant is still waiting on a background subagent, background job, or async task to finish on its own (NEVER suggest "continue waiting" or "wait for result"), or when there is no plausible concrete follow-up instruction.',
 ].join('\n')
 
 const SYSTEM_REMINDER_RE = /<system-reminder>[\s\S]*?<\/system-reminder>/giu
 const WRAPPING_MARKERS_RE = /^(?:(?:"([\s\S]+)")|(?:'([\s\S]+)')|(?:“([\s\S]+)ˮ)|(?:“([\s\S]+)”)|(?:「([\s\S]+)」)|(?:`([^`]+)`)|(?:\*{1,3}([^*\n]+)\*{1,3}))$/u
 const LEADING_LIST_MARKER_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u
 const ASSISTANT_VOICE_RE = /^(?:需要我|要我|是否需要我|要不要我|我可以帮|我可以继续|请问还需要|would you like me to|do you want me to|shall i\b|should i\b|i can help|let me know if\b|feel free to\b)/iu
+const WAITING_PSEUDO_PROMPT_RE = /^(?:继续等待|等待(?:子代理|子智能体|后台|任务|脚本|审查|结果)|先等(?:待|子代理|后台|一下)|请等待|(?:continue|keep)\s+waiting\b|wait\s+for\s+(?:the\s+)?(?:subagent|agent|background|job|task|review|result)\b)/iu
 const NONE_TOKENS = new Set(['none', 'n/a', 'null', 'nil', '无', '暂无', '没有', '不需要'])
 
 /**
@@ -146,6 +147,10 @@ export function extractTurnContext(events, maxInputBytes) {
   /** @type {Map<string, number>} */
   const toolCounts = new Map()
   let toolErrorCount = 0
+  let ranTests = false
+  let ranGitCommit = false
+  let ranGitPush = false
+  let editedFiles = false
 
   for (let i = lastStartIdx; i <= lastEndIdx; i++) {
     const ev = events[i]
@@ -162,8 +167,33 @@ export function extractTurnContext(events, maxInputBytes) {
       }
     } else if (ev.type === 'tool/call') {
       const toolName = ev.data?.name
-      if (typeof toolName === 'string' && toolName.length > 0 && toolCounts.size < 12) {
-        toolCounts.set(toolName, (toolCounts.get(toolName) ?? 0) + 1)
+      if (typeof toolName === 'string' && toolName.length > 0) {
+        if (toolCounts.size < 12 || toolCounts.has(toolName)) {
+          toolCounts.set(toolName, (toolCounts.get(toolName) ?? 0) + 1)
+        }
+        if (toolName === 'edit' || toolName === 'write' || toolName === 'str_replace_editor' || toolName === 'fs-sandbox' || toolName === 'tool-fs') {
+          editedFiles = true
+        } else if (toolName === 'bash' || toolName === 'pwsh' || toolName === 'terminal') {
+          const rawArgs = ev.data?.arguments
+          let cmd = ''
+          if (typeof rawArgs === 'string') {
+            try {
+              const parsed = JSON.parse(rawArgs)
+              if (typeof parsed?.command === 'string') cmd = parsed.command
+            } catch {
+              // Ignore truncated/malformed tool-call JSON on historical events rather than scanning non-command fields.
+            }
+          } else if (rawArgs && typeof rawArgs === 'object' && typeof rawArgs.command === 'string') {
+            cmd = rawArgs.command
+          }
+          if (cmd.length > 0) {
+            if (/\b(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|node\s+--test\b|pytest\b|vitest\b|jest\b|cargo\s+test\b|go\s+test\b)/iu.test(cmd)) {
+              ranTests = true
+            }
+            if (/\bgit\s+commit\b/iu.test(cmd)) ranGitCommit = true
+            if (/\bgit\s+push\b/iu.test(cmd)) ranGitPush = true
+          }
+        }
       }
     } else if (ev.type === 'tool/result') {
       if (ev.data?.message?.isError === true || ev.data?.error !== undefined) {
@@ -199,10 +229,10 @@ export function extractTurnContext(events, maxInputBytes) {
   const assistantReply = clipHeadTail(latestAssistantText, 650, 1750)
 
   const toolFeatures = {
-    ranTests: toolCounts.has('bash') && Array.from(toolCounts.keys()).some(k => k.includes('test')),
-    ranGitCommit: toolCounts.has('bash') && Array.from(toolCounts.keys()).some(k => k.includes('commit')),
-    ranGitPush: toolCounts.has('bash') && Array.from(toolCounts.keys()).some(k => k.includes('push')),
-    editedFiles: toolCounts.has('fs-sandbox') || toolCounts.has('tool-fs'),
+    ranTests,
+    ranGitCommit,
+    ranGitPush,
+    editedFiles,
   }
 
   const buildPayload = (prevUser, currUser, reply) => {
@@ -273,6 +303,7 @@ export function parseSuggestionOutput(rawText) {
   if (candidate.length < 2 || candidate.length > 120) return null
   if (/<\/?[a-z][^>]*>/iu.test(candidate)) return null
   if (ASSISTANT_VOICE_RE.test(candidate)) return null
+  if (WAITING_PSEUDO_PROMPT_RE.test(candidate)) return null
 
   return candidate
 }

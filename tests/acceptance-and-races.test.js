@@ -891,12 +891,30 @@ test('P0 #1 (DOM + MutationObserver): NextStepOverlay yields to disabled/blocked
       },
     })
 
+    let childRunningInList = false
+    let bgJobRunningInStore = false
     const cleanups = []
     clientPlugin.apply({
       effect(fn) {
         const c = fn()
         if (typeof c === 'function') cleanups.push(c)
         return c
+      },
+      sessions: {
+        list: {
+          subscribe: () => () => {},
+          getSnapshot: () => ({ byId: { 'child-sub-1': { running: childRunningInList } } }),
+        },
+      },
+      jobs: {
+        state: {
+          subscribe: () => () => {},
+          getSnapshot: () => ({
+            rows: {
+              'dom-gate-session': bgJobRunningInStore ? [{ id: 'j1', status: 'running' }] : [],
+            },
+          }),
+        },
       },
       locale: { register: () => () => {} },
       slots: {
@@ -923,6 +941,7 @@ test('P0 #1 (DOM + MutationObserver): NextStepOverlay yields to disabled/blocked
       useProjection: (key) => {
         if (key === 'turnOutline') return [{ turn: 1 }]
         if (key === 'plan') return planState
+        if (key === 'subagentCatalog') return [{ id: 'child-sub-1' }]
         return null
       },
       usePanelInfo: sel => sel({ activePanelId: null }),
@@ -980,6 +999,21 @@ test('P0 #1 (DOM + MutationObserver): NextStepOverlay yields to disabled/blocked
     assert.equal(vnode.children[0], null)
 
     planState = { active: false, pending: false }
+    vnode = renderOverlay()
+    assert.ok(vnode.children[0] !== null)
+
+    // D3. Running child subagent or running background job hides overlay until background work settles.
+    childRunningInList = true
+    vnode = renderOverlay()
+    assert.equal(vnode.children[0], null)
+    childRunningInList = false
+    vnode = renderOverlay()
+    assert.ok(vnode.children[0] !== null)
+
+    bgJobRunningInStore = true
+    vnode = renderOverlay()
+    assert.equal(vnode.children[0], null)
+    bgJobRunningInStore = false
     vnode = renderOverlay()
     assert.ok(vnode.children[0] !== null)
 
@@ -1144,4 +1178,211 @@ test('P0 #4 (Clickable/tappable Tab badge): clicking Tab pill accepts into draft
 
   mockReact.unmount()
   for (const c of cleanups) c()
+})
+
+function findVNode(node, predicate) {
+  if (!node || typeof node !== 'object') return null
+  if (predicate(node)) return node
+  if (Array.isArray(node.children)) {
+    for (const child of node.children) {
+      const found = findVNode(child, predicate)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+test('P1 #2 (plugins.bundle.config UI): BundleConfigCard loads catalog, pins custom/catalog model, edits advanced limits, resets, and saves', async () => {
+  const hostEffects = []
+  const routes = new Map()
+  let savedConfigRecord = null
+  const fakeEntry = { options: { id: 'next-step-suggestion' } }
+
+  const hostCtx = {
+    fiber: { entry: fakeEntry },
+    effect(fn) {
+      const c = fn()
+      if (typeof c === 'function') hostEffects.push(c)
+      return c
+    },
+    on() { return () => {} },
+    get(key) {
+      if (key === 'configEditor') {
+        return {
+          async edit(_entry, change) {
+            savedConfigRecord = change(savedConfigRecord ?? {}, { maxInputBytes: 6000, maxOutputTokens: 4096, timeoutMs: 30000 })
+          },
+        }
+      }
+      return hostCtx[key]
+    },
+    connection: { requestRejection: () => undefined },
+    webServer: {
+      register(route) {
+        routes.set(route.path, route.handler)
+        return () => { routes.delete(route.path) }
+      },
+    },
+    agents: { get: () => undefined },
+    llm: {
+      listProviders: () => [
+        { id: 'deepseek', name: 'DeepSeek' },
+        { id: 'openai-gw', name: 'OpenAI Gateway' },
+      ],
+      async listModels(pid) {
+        if (pid === 'deepseek') {
+          return [{ provider: 'deepseek', id: 'deepseek-chat', name: 'DeepSeek Chat' }]
+        }
+        return []
+      },
+    },
+  }
+
+  applyHostPlugin(hostCtx, {})
+
+  const server = createServer(async (req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+    const handler = routes.get(url.pathname)
+    if (!handler) {
+      res.statusCode = 404
+      res.end()
+      return
+    }
+    await handler(req, res)
+  })
+  await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen))
+  const baseUrl = `http://127.0.0.1:${server.address().port}`
+
+  try {
+    const mockReact = createMinimalReactHarness()
+    let registeredBundleConfig = null
+    let registeredBundleMeta = null
+    let forceCorruptPostJson = false
+    const clientCleanups = []
+
+    const clientPlugin = createClientPlugin(mockReact.React, {
+      fetchImpl: (path, init) => {
+        if (forceCorruptPostJson && init?.method === 'POST') {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+          })
+        }
+        return fetch(`${baseUrl}${path}`, init)
+      },
+    })
+
+    clientPlugin.apply({
+      effect(fn) {
+        const c = fn()
+        if (typeof c === 'function') clientCleanups.push(c)
+        return c
+      },
+      locale: { register: () => () => {} },
+      slots: {
+        inject(_key, cb) { return cb() },
+        register(meta, Comp) {
+          if (meta.name === 'plugins.bundle.config') {
+            registeredBundleMeta = meta
+            registeredBundleConfig = Comp
+          }
+          return () => {}
+        },
+      },
+    })
+
+    assert.ok(registeredBundleConfig)
+    assert.equal(registeredBundleMeta.key, 'dsh-next-step-suggestion')
+
+    // 1. Initial mount -> loading -> ready with `session` mode and clean state (Save disabled).
+    let tree = mockReact.render(registeredBundleConfig, { view: 'page' }, null)
+    assert.equal(tree.props['data-nss-config-card'], 'loading')
+    await flushMicrotasks()
+    await flushMicrotasks()
+    tree = mockReact.render(registeredBundleConfig, { view: 'page' }, null)
+    assert.equal(tree.props['data-nss-config-card'], 'ready')
+
+    const saveBtnInitial = findVNode(tree, n => n.props?.['data-nss-cfg-save'] === '')
+    assert.equal(saveBtnInitial.props.disabled, true)
+
+    // 2. Switch to `custom` mode -> selects first provider (`deepseek`) and its first model (`deepseek-chat`).
+    const customRadio = findVNode(tree, n => n.props?.['data-nss-cfg-mode'] === 'custom')
+    customRadio.props.onChange()
+    tree = mockReact.render(registeredBundleConfig, { view: 'page' }, null)
+
+    const provSelect = findVNode(tree, n => n.props?.['data-nss-cfg-provider-select'] === '')
+    const modelSelect = findVNode(tree, n => n.props?.['data-nss-cfg-model-select'] === '')
+    const provLabel = findVNode(tree, n => n.type === 'label' && n.props?.htmlFor === provSelect.props.id)
+    assert.ok(provLabel)
+    assert.equal(provSelect.props.value, 'deepseek')
+    assert.equal(modelSelect.props.value, 'deepseek-chat')
+
+    // Choose `__custom__` option in model dropdown -> clears catalog model ID until user types a custom ID, and expand Advanced limits!
+    modelSelect.props.onChange({ target: { value: '__custom__' } })
+    tree = mockReact.render(registeredBundleConfig, { view: 'page' }, null)
+    const modelInput = findVNode(tree, n => n.props?.['data-nss-cfg-model-input'] === '')
+    assert.ok(modelInput)
+    assert.equal(modelInput.props.value, '')
+    assert.equal(findVNode(tree, n => n.props?.['data-nss-cfg-save'] === '').props.disabled, true)
+    modelInput.props.onChange({ target: { value: 'deepseek-flash' } })
+
+    const advToggle = findVNode(tree, n => n.props?.['data-nss-cfg-adv-toggle'] === '')
+    advToggle.props.onClick()
+    tree = mockReact.render(registeredBundleConfig, { view: 'page' }, null)
+    const timeoutInput = findVNode(tree, n => n.props?.['data-nss-cfg-timeout'] === '')
+    timeoutInput.props.onChange({ target: { value: '12000' } })
+
+    tree = mockReact.render(registeredBundleConfig, { view: 'page' }, null)
+    const saveBtnReady = findVNode(tree, n => n.props?.['data-nss-cfg-save'] === '')
+    assert.equal(saveBtnReady.props.disabled, false)
+
+    // 3a. Corrupt HTTP 200 JSON response must surface an error alert instead of claiming saved!
+    forceCorruptPostJson = true
+    saveBtnReady.props.onClick()
+    await flushMicrotasks()
+    await flushMicrotasks()
+    tree = mockReact.render(registeredBundleConfig, { view: 'page' }, null)
+    const errAlert = findVNode(tree, n => n.props?.role === 'alert')
+    assert.ok(errAlert)
+    assert.equal(savedConfigRecord, null)
+    forceCorruptPostJson = false
+
+    // 3b. Click Save with valid transport -> persists via POST /api/next-step-suggestion/config -> ConfigEditor!
+    findVNode(tree, n => n.props?.['data-nss-cfg-save'] === '').props.onClick()
+    await flushMicrotasks()
+    await flushMicrotasks()
+    tree = mockReact.render(registeredBundleConfig, { view: 'page' }, null)
+
+    assert.deepEqual(savedConfigRecord, {
+      maxInputBytes: 6000,
+      maxOutputTokens: 4096,
+      timeoutMs: 12000,
+      provider: 'deepseek',
+      model: 'deepseek-flash',
+    })
+    // Save button becomes disabled again once baseline matches saved draft.
+    assert.equal(findVNode(tree, n => n.props?.['data-nss-cfg-save'] === '').props.disabled, true)
+
+    // 4. Click Reset to defaults -> Save -> clears custom provider/model back to defaults!
+    const resetBtn = findVNode(tree, n => n.props?.['data-nss-cfg-reset'] === '')
+    assert.equal(resetBtn.props.disabled, false)
+    resetBtn.props.onClick()
+    tree = mockReact.render(registeredBundleConfig, { view: 'page' }, null)
+    findVNode(tree, n => n.props?.['data-nss-cfg-save'] === '').props.onClick()
+    await flushMicrotasks()
+    await flushMicrotasks()
+
+    assert.deepEqual(savedConfigRecord, {
+      maxInputBytes: 6000,
+      maxOutputTokens: 4096,
+      timeoutMs: 30000,
+    })
+
+    mockReact.unmount()
+    for (const c of clientCleanups) c()
+    for (const c of hostEffects) c()
+  } finally {
+    await new Promise(resolveClose => server.close(resolveClose))
+  }
 })

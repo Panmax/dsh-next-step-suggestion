@@ -4,12 +4,13 @@ import test from 'node:test'
 
 import { extractTurnContext, parseSuggestionOutput } from '../src/context.js'
 import {
+  CONFIG_ROUTE_PATH,
   createSuggestionCoordinator,
   createSuggestRouteHandler,
   resolveHostConfig,
   SUGGEST_ROUTE_PATH,
 } from '../src/host.js'
-import { apply as applyHostPlugin } from '../index.js'
+import { apply as applyHostPlugin, Config as ExportedPluginConfig } from '../index.js'
 
 function buildCompletedSessionEvents({
   turn = 1,
@@ -166,6 +167,10 @@ test('parseSuggestionOutput cleans valid user prompts and rejects NONE, slash co
   assert.equal(parseSuggestionOutput('```bash\nnpm test\n```'), null)
   assert.equal(parseSuggestionOutput('需要我帮你运行回归测试吗？'), null)
   assert.equal(parseSuggestionOutput('Would you like me to run the tests now?'), null)
+  assert.equal(parseSuggestionOutput('继续等待子代理审查结果并输出收尾总结'), null)
+  assert.equal(parseSuggestionOutput('等待后台任务完成'), null)
+  assert.equal(parseSuggestionOutput('Continue waiting for the subagent result'), null)
+  assert.equal(parseSuggestionOutput('Wait for the background job to finish'), null)
 })
 
 test('resolveHostConfig validates bounds and provider/model pairing', () => {
@@ -422,4 +427,358 @@ test('requireLiveCompletion skips cold historical sessions while allowing backgr
     turn: 2,
     suggestion: '查看后台任务的变更摘要',
   })
+})
+
+test('extractTurnContext derives sanitized boolean toolFeatures without leaking raw command secrets', () => {
+  const events = [
+    { type: 'turn/start', seq: 1, data: { turn: 1 } },
+    {
+      type: 'user/message',
+      seq: 2,
+      data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '修复测试并提交推送' }] },
+    },
+    {
+      type: 'tool/call',
+      seq: 3,
+      data: { turn: 1, step: 1, name: 'edit', arguments: '{"file_path":"src/a.js"}' },
+    },
+    {
+      type: 'tool/call',
+      seq: 4,
+      data: {
+        turn: 1,
+        step: 1,
+        name: 'bash',
+        arguments: JSON.stringify({ command: 'TOKEN=TOP_SECRET_VAL npm test && git commit -m "fix" && git push' }),
+      },
+    },
+    {
+      type: 'assistant/message',
+      seq: 5,
+      data: {
+        turn: 1,
+        step: 2,
+        message: { role: 'assistant', content: [{ type: 'text', text: '已修改文件、跑通测试并完成推送。' }] },
+      },
+    },
+    { type: 'turn/end', seq: 6, data: { turn: 1, reason: { kind: 'completed' } } },
+  ]
+
+  const res = extractTurnContext(events, 6000)
+  assert.equal(res.eligible, true)
+  assert.match(res.promptInput, /"ranTests":true/)
+  assert.match(res.promptInput, /"ranGitCommit":true/)
+  assert.match(res.promptInput, /"ranGitPush":true/)
+  assert.match(res.promptInput, /"editedFiles":true/)
+  assert.doesNotMatch(res.promptInput, /TOP_SECRET_VAL/)
+
+  // Malformed JSON in tool/call arguments must NOT match non-command prose fields, while >4 KB valid JSON still extracts command.
+  const edgeEvents = [
+    { type: 'turn/start', seq: 1, data: { turn: 2 } },
+    {
+      type: 'user/message',
+      seq: 2,
+      data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '生成长脚本并测试' }] },
+    },
+    {
+      type: 'tool/call',
+      seq: 3,
+      data: { turn: 2, step: 1, name: 'bash', arguments: '{"description":"Do not git push yet","command":"incomplete' },
+    },
+    {
+      type: 'tool/call',
+      seq: 4,
+      data: { turn: 2, step: 1, name: 'bash', arguments: JSON.stringify({ command: `echo "${'x'.repeat(5000)}" && npm test` }) },
+    },
+    {
+      type: 'assistant/message',
+      seq: 5,
+      data: { turn: 2, step: 2, message: { role: 'assistant', content: [{ type: 'text', text: '长脚本测试已通过。' }] } },
+    },
+    { type: 'turn/end', seq: 6, data: { turn: 2, reason: { kind: 'completed' } } },
+  ]
+  const edgeRes = extractTurnContext(edgeEvents, 6000)
+  assert.equal(edgeRes.eligible, true)
+  assert.match(edgeRes.promptInput, /"ranTests":true/)
+  assert.match(edgeRes.promptInput, /"ranGitPush":false/)
+})
+
+test('Standard Schema Config validator, unknown key rejection, armed goal gate, and /api/next-step-suggestion/config GET/POST', async () => {
+  // 1. Unknown config keys and Standard Schema v1 contract.
+  assert.throws(() => resolveHostConfig({ maxOutputToken: 1024 }), /unknown config key "maxOutputToken"/)
+  assert.equal(ExportedPluginConfig['~standard'].version, 1)
+  const validSchemaRes = ExportedPluginConfig['~standard'].validate({ timeoutMs: 15000 })
+  assert.equal(validSchemaRes.issues, undefined)
+  assert.equal(validSchemaRes.value.timeoutMs, 15000)
+  const undefSchemaRes = ExportedPluginConfig['~standard'].validate(undefined)
+  assert.equal(undefSchemaRes.issues, undefined)
+  const nullSchemaRes = ExportedPluginConfig['~standard'].validate(null)
+  assert.ok(Array.isArray(nullSchemaRes.issues) && nullSchemaRes.issues.length === 1)
+  const invalidSchemaRes = ExportedPluginConfig['~standard'].validate({ typoField: true })
+  assert.ok(Array.isArray(invalidSchemaRes.issues) && invalidSchemaRes.issues.length === 1)
+
+  // 2. Host config route + armed Goal gate.
+  const effects = []
+  const routes = new Map()
+  let authRejection
+  let persistedConfig = null
+  let shouldRejectSave = false
+  let editorAvailable = true
+  let entryAddressable = true
+  let goalArmed = false
+  let subagentRunning = false
+  let bgJobRunning = false
+  const usedRoutes = []
+  let currentTurn = 1
+
+  const fakeEntry = { options: { id: 'next-step-suggestion' } }
+  const agent = {
+    id: 'sess-cfg',
+    status: 'idle',
+    inbox: { nextTurn: [], nextStep: [] },
+    model: { current: () => ({ provider: 'anthropic', model: 'claude-opus-4-6' }) },
+    session: {
+      id: 'sess-cfg',
+      header: {},
+      snapshotEvents: () => buildCompletedSessionEvents({ turn: currentTurn }),
+    },
+  }
+  const childAgent = {
+    id: 'sess-child-1',
+    get status() { return subagentRunning ? 'running' : 'idle' },
+    session: {
+      id: 'sess-child-1',
+      header: { origin: 'subagent', parentSession: 'sess-cfg' },
+    },
+  }
+
+  const ctx = {
+    fiber: { entry: fakeEntry },
+    effect(fn) {
+      const c = fn()
+      if (typeof c === 'function') effects.push(c)
+      return c
+    },
+    on() { return () => {} },
+    get(key) {
+      if (key === 'configEditor') {
+        return editorAvailable
+          ? {
+              entries: () => (entryAddressable ? [fakeEntry] : []),
+              async edit(entry, change) {
+                assert.equal(entry, fakeEntry)
+                if (shouldRejectSave) throw new Error('Overridden by command-line overlay')
+                persistedConfig = change(persistedConfig ?? {}, { maxInputBytes: 6000, maxOutputTokens: 4096, timeoutMs: 30000 })
+              },
+            }
+          : undefined
+      }
+      if (key === 'jobs') {
+        return {
+          list: caller => (caller === 'sess-cfg' && bgJobRunning ? [{ id: 'job-1', status: 'running' }] : []),
+        }
+      }
+      if (key === 'goal') {
+        return {
+          get: () => (goalArmed ? { goal: { phase: 'active' }, activation: 'armed' } : undefined),
+        }
+      }
+      if (key === 'agentDefaultModel') {
+        return { currentSelection: () => ({ provider: 'deepseek', model: 'deepseek-reasoner' }) }
+      }
+      return ctx[key]
+    },
+    connection: { requestRejection: () => authRejection },
+    webServer: {
+      register(route) {
+        routes.set(route.path, route.handler)
+        return () => { routes.delete(route.path) }
+      },
+    },
+    agents: {
+      get: id => (id === 'sess-cfg' ? agent : (id === 'sess-child-1' ? childAgent : undefined)),
+      list: () => [agent, childAgent],
+    },
+    llm: {
+      listProviders: () => [
+        { id: 'deepseek', name: 'DeepSeek' },
+        { id: 'broken-provider', name: 'Broken' },
+      ],
+      async listModels(providerId) {
+        if (providerId === 'broken-provider') throw new Error('Adapter unreachable')
+        return [
+          { provider: 'deepseek', id: 'deepseek-chat', name: 'DeepSeek Chat' },
+          { provider: 'deepseek', id: 'deepseek-reasoner', name: 'DeepSeek Reasoner' },
+        ]
+      },
+      async prepareCall(callCfg) {
+        usedRoutes.push({ provider: callCfg.provider, model: callCfg.model, maxTokens: callCfg.maxTokens })
+        return {
+          config: callCfg,
+          async *stream() {
+            yield { type: 'text-delta', index: 0, text: '检查配置保存结果' }
+            yield { type: 'finish', reason: { kind: 'stop' } }
+          },
+        }
+      },
+    },
+  }
+
+  applyHostPlugin(ctx, { timeoutMs: 25000 })
+  assert.equal(routes.has(CONFIG_ROUTE_PATH), true)
+
+  async function callRoute(path, { method = 'GET', contentType = 'application/json', body = '' } = {}) {
+    const handler = routes.get(path)
+    const req = Readable.from(body ? [Buffer.from(body, 'utf8')] : [])
+    req.method = method
+    req.headers = contentType ? { 'content-type': contentType } : {}
+    let statusCode = 200
+    const headers = new Map()
+    let rawBody = ''
+    const res = {
+      get statusCode() { return statusCode },
+      set statusCode(v) { statusCode = v },
+      setHeader(k, v) { headers.set(k.toLowerCase(), v) },
+      end(chunk = '') { rawBody += String(chunk) },
+    }
+    await handler(req, res)
+    return { statusCode, headers, json: rawBody ? JSON.parse(rawBody) : null }
+  }
+
+  // Auth enforced on config route.
+  authRejection = 403
+  assert.equal((await callRoute(CONFIG_ROUTE_PATH)).statusCode, 403)
+  authRejection = undefined
+
+  // GET returns current config, defaults, editable=true, defaultRoute, and catalog (broken adapter gracefully yields []).
+  const getRes = await callRoute(CONFIG_ROUTE_PATH)
+  assert.equal(getRes.statusCode, 200)
+  assert.equal(getRes.json.editable, true)
+  assert.equal(getRes.json.config.timeoutMs, 25000)
+  assert.equal(getRes.json.config.provider, null)
+  assert.deepEqual(getRes.json.defaultRoute, { provider: 'deepseek', model: 'deepseek-reasoner' })
+  assert.equal(getRes.json.providers.length, 2)
+  assert.equal(getRes.json.providers[0].models.length, 2)
+  assert.deepEqual(getRes.json.providers[1].models, [])
+
+  // POST rejects unknown keys or mismatched provider/model with 400.
+  const badKey = await callRoute(CONFIG_ROUTE_PATH, {
+    method: 'POST',
+    body: JSON.stringify({ maxInputBytes: 6000, maxOutputTokens: 4096, timeoutMs: 30000, extraKey: 1 }),
+  })
+  assert.equal(badKey.statusCode, 400)
+  assert.equal(badKey.json.code, 'invalid-config')
+
+  // POST surfaces missing configEditor with 409.
+  editorAvailable = false
+  const noEditor = await callRoute(CONFIG_ROUTE_PATH, {
+    method: 'POST',
+    body: JSON.stringify({ maxInputBytes: 6000, maxOutputTokens: 4096, timeoutMs: 20000, provider: null, model: null }),
+  })
+  assert.equal(noEditor.statusCode, 409)
+  assert.equal(noEditor.json.code, 'config-editor-unavailable')
+  editorAvailable = true
+
+  // POST surfaces higher-layer override error with 409.
+  shouldRejectSave = true
+  const rejectedSave = await callRoute(CONFIG_ROUTE_PATH, {
+    method: 'POST',
+    body: JSON.stringify({ maxInputBytes: 6000, maxOutputTokens: 4096, timeoutMs: 20000, provider: 'deepseek', model: 'deepseek-chat' }),
+  })
+  assert.equal(rejectedSave.statusCode, 409)
+  assert.match(rejectedSave.json.message, /Overridden by command-line overlay/)
+  shouldRejectSave = false
+
+  // Non-addressable entry reports editable=false on GET.
+  entryAddressable = false
+  assert.equal((await callRoute(CONFIG_ROUTE_PATH)).json.editable, false)
+  entryAddressable = true
+
+  // Armed Goal session is skipped on Host (`goal-active`).
+  goalArmed = true
+  const goalRes = await callRoute(SUGGEST_ROUTE_PATH, {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: 'sess-cfg', expectedTurn: 1 }),
+  })
+  assert.equal(goalRes.json.status, 'ineligible')
+  assert.equal(goalRes.json.reason, 'goal-active')
+  assert.equal(usedRoutes.length, 0)
+  goalArmed = false
+
+  // Running descendant subagent skips suggestion generation (`subagent-running`).
+  subagentRunning = true
+  const subRes = await callRoute(SUGGEST_ROUTE_PATH, {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: 'sess-cfg', expectedTurn: 1 }),
+  })
+  assert.equal(subRes.json.status, 'ineligible')
+  assert.equal(subRes.json.reason, 'subagent-running')
+  assert.equal(usedRoutes.length, 0)
+  subagentRunning = false
+
+  // Running background job skips suggestion generation (`background-job-running`).
+  bgJobRunning = true
+  const jobRes = await callRoute(SUGGEST_ROUTE_PATH, {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: 'sess-cfg', expectedTurn: 1 }),
+  })
+  assert.equal(jobRes.json.status, 'ineligible')
+  assert.equal(jobRes.json.reason, 'background-job-running')
+  assert.equal(usedRoutes.length, 0)
+  bgJobRunning = false
+
+  // Before pinning a model, suggest uses session's model (`anthropic/claude-opus-4-6`).
+  await callRoute(SUGGEST_ROUTE_PATH, {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: 'sess-cfg', expectedTurn: 1 }),
+  })
+  assert.deepEqual(usedRoutes[0], { provider: 'anthropic', model: 'claude-opus-4-6', maxTokens: 4096 })
+
+  // POST pins lightweight `deepseek/deepseek-chat` and `maxOutputTokens: 2048` -> persists via ConfigEditor & switches route immediately!
+  const savedCustom = await callRoute(CONFIG_ROUTE_PATH, {
+    method: 'POST',
+    body: JSON.stringify({
+      maxInputBytes: 5000,
+      maxOutputTokens: 2048,
+      timeoutMs: 15000,
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+    }),
+  })
+  assert.equal(savedCustom.statusCode, 200)
+  assert.deepEqual(persistedConfig, {
+    maxInputBytes: 5000,
+    maxOutputTokens: 2048,
+    timeoutMs: 15000,
+    provider: 'deepseek',
+    model: 'deepseek-chat',
+  })
+
+  currentTurn = 2
+  await callRoute(SUGGEST_ROUTE_PATH, {
+    method: 'POST',
+    body: JSON.stringify({ sessionId: 'sess-cfg', expectedTurn: 2 }),
+  })
+  assert.deepEqual(usedRoutes[1], { provider: 'deepseek', model: 'deepseek-chat', maxTokens: 2048 })
+
+  // POST with `provider: null, model: null` omits route keys cleanly so ConfigEditor can drop redundant overrides.
+  const resetRes = await callRoute(CONFIG_ROUTE_PATH, {
+    method: 'POST',
+    body: JSON.stringify({
+      maxInputBytes: 6000,
+      maxOutputTokens: 4096,
+      timeoutMs: 30000,
+      provider: null,
+      model: null,
+    }),
+  })
+  assert.equal(resetRes.statusCode, 200)
+  assert.deepEqual(persistedConfig, {
+    maxInputBytes: 6000,
+    maxOutputTokens: 4096,
+    timeoutMs: 30000,
+  })
+
+  for (const c of effects.splice(0)) c()
+  assert.equal(routes.has(CONFIG_ROUTE_PATH), false)
 })

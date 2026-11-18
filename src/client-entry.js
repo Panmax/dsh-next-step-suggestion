@@ -4,6 +4,7 @@
  */
 
 import {
+  CONFIG_ENDPOINT,
   createClientSuggestionMachine,
   LOCALES,
   LOCALE_NS,
@@ -94,6 +95,25 @@ function domGateSignature(anchorEl) {
   return `${Number(g.domOverlayOpen)}:${Number(g.composing)}:${Number(g.editorEditable)}:${Number(g.hasDomDecorators)}:${Number(g.composerTakenOver)}`
 }
 
+const CUSTOM_MODEL_SENTINEL = '__custom__'
+let configCardInstanceSeq = 0
+
+function parsePositiveIntInput(raw) {
+  const trimmed = String(raw ?? '').trim()
+  if (!/^\d+$/u.test(trimmed)) return null
+  const num = Number(trimmed)
+  return Number.isSafeInteger(num) && num > 0 ? num : null
+}
+
+function makeTranslator(t) {
+  return typeof t === 'function'
+    ? t
+    : ((key, vars) => {
+        const template = LOCALES.en[key] ?? key
+        return vars?.text ? template.replace('{text}', vars.text) : template
+      })
+}
+
 /**
  * Build the Cordis client plugin definition given `React` from the browser module table.
  * @param {any} React
@@ -116,6 +136,46 @@ export function createClientPlugin(React, options = {}) {
       signal,
     }).then((res) => {
       if (!res || !res.ok) return null
+      return res.json()
+    })
+  }
+
+  function fetchConfigFromHost(signal) {
+    return fetchFn(CONFIG_ENDPOINT, {
+      method: 'GET',
+      credentials: 'same-origin',
+      signal,
+    }).then(async (res) => {
+      if (!res || !res.ok) {
+        if (res?.status === 404) {
+          const notReadyErr = new Error('HTTP 404')
+          notReadyErr.code = 'ROUTE_NOT_READY'
+          throw notReadyErr
+        }
+        let message = ''
+        try {
+          const errBody = await res?.json?.()
+          if (typeof errBody?.message === 'string') message = errBody.message
+        } catch {
+          // Ignore non-JSON error body.
+        }
+        throw new Error(message || `HTTP ${res?.status ?? 'error'}`)
+      }
+      return res.json()
+    })
+  }
+
+  function saveConfigToHost(payload) {
+    return fetchFn(CONFIG_ENDPOINT, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(async (res) => {
+      if (!res || !res.ok) {
+        const errData = await res?.json?.().catch(() => null)
+        throw new Error(typeof errData?.message === 'string' && errData.message !== '' ? errData.message : `HTTP ${res?.status ?? 'error'}`)
+      }
       return res.json()
     })
   }
@@ -255,6 +315,46 @@ export function createClientPlugin(React, options = {}) {
         const goal = typeof useProjection === 'function' ? useProjection('goal') : undefined
         const goalActive = Boolean(goal?.goal?.phase === 'active')
 
+        const subagentCatalog = typeof useProjection === 'function' ? useProjection('subagentCatalog') : undefined
+        const sessionsListStore = (ctx.get?.('sessions') ?? ctx.sessions)?.list
+        const hasSubagentEntries = Array.isArray(subagentCatalog) && subagentCatalog.length > 0
+        const subscribeSessionsList = React.useMemo(
+          () => (sessionsListStore?.subscribe && hasSubagentEntries
+            ? fn => sessionsListStore.subscribe(fn)
+            : NOOP_SUBSCRIBE),
+          [sessionsListStore, hasSubagentEntries],
+        )
+        const hasRunningSubagent = React.useSyncExternalStore(
+          subscribeSessionsList,
+          () => {
+            if (!hasSubagentEntries) return false
+            if (subagentCatalog.some(entry => entry?.activity === 'running')) return true
+            const byId = sessionsListStore?.getSnapshot?.()?.byId
+            if (!byId || typeof byId !== 'object') return false
+            return subagentCatalog.some(entry => entry?.id && byId[entry.id]?.running === true)
+          },
+          FALSE_SNAPSHOT,
+        )
+
+        const jobsStateStore = (ctx.get?.('jobs') ?? ctx.jobs)?.state
+        const hasSessionId = Boolean(sessionId)
+        const subscribeJobsState = React.useMemo(
+          () => (jobsStateStore?.subscribe && hasSessionId
+            ? fn => jobsStateStore.subscribe(fn)
+            : NOOP_SUBSCRIBE),
+          [jobsStateStore, hasSessionId],
+        )
+        const hasRunningJob = React.useSyncExternalStore(
+          subscribeJobsState,
+          () => {
+            if (!sessionId) return false
+            const rows = jobsStateStore?.getSnapshot?.()?.rows?.[sessionId]
+            return Array.isArray(rows) && rows.some(j => j && (j.status === 'running' || j.status === 'stopping'))
+          },
+          FALSE_SNAPSHOT,
+        )
+        const backgroundWorkRunning = hasRunningSubagent || hasRunningJob
+
         const buildEnvForAnchor = (anchorNode) => {
           const domGates = readComposerDomGates(anchorNode)
           return {
@@ -265,6 +365,7 @@ export function createClientPlugin(React, options = {}) {
             composerTakenOver: domGates.composerTakenOver,
             planActive,
             goalActive,
+            backgroundWorkRunning,
             running,
             hasError: promptError !== null || retryableFailure !== null,
             submissionPending: pendingCount > 0 || queueLen > 0,
@@ -430,10 +531,7 @@ export function createClientPlugin(React, options = {}) {
         }
 
         const suggestionText = machine.getVisibleSuggestion(envSnapshot)
-        const translate = typeof t === 'function' ? t : ((key, vars) => {
-          const template = LOCALES.en[key] ?? key
-          return vars?.text ? template.replace('{text}', vars.text) : template
-        })
+        const translate = makeTranslator(t)
         const acceptLabel = translate('accept.label')
 
         return h(
@@ -471,6 +569,535 @@ export function createClientPlugin(React, options = {}) {
               ),
         )
       }
+
+      function BundleConfigCard(props) {
+        if (props?.view === 'summary') return null
+        const translate = makeTranslator(props?.t)
+        const idPrefixRef = React.useRef(null)
+        if (idPrefixRef.current === null) {
+          configCardInstanceSeq += 1
+          idPrefixRef.current = `dsh-nss-cfg-${configCardInstanceSeq}`
+        }
+        const idPrefix = idPrefixRef.current
+        const customModelInputRef = React.useRef(null)
+        const pendingCustomFocusRef = React.useRef(false)
+
+        const [loadState, setLoadState] = React.useState('loading')
+        const [loadError, setLoadError] = React.useState('')
+        const [reloadSeq, setReloadSeq] = React.useState(0)
+        const [editable, setEditable] = React.useState(true)
+        const [defaults, setDefaults] = React.useState({ maxInputBytes: 6000, maxOutputTokens: 4096, timeoutMs: 30000 })
+        const [maxTimeoutMs, setMaxTimeoutMs] = React.useState(300000)
+        const [providers, setProviders] = React.useState([])
+        const [baseline, setBaseline] = React.useState(null)
+        const [draft, setDraft] = React.useState({
+          routeMode: 'session',
+          provider: '',
+          model: '',
+          useCustomModel: false,
+          maxInputBytes: '6000',
+          maxOutputTokens: '4096',
+          timeoutMs: '30000',
+        })
+        const [advancedOpen, setAdvancedOpen] = React.useState(false)
+        const [saving, setSaving] = React.useState(false)
+        const [feedback, setFeedback] = React.useState(null)
+
+        React.useEffect(() => {
+          const ac = new AbortController()
+          setLoadState('loading')
+          setLoadError('')
+
+          fetchConfigFromHost(ac.signal)
+            .then((data) => {
+              if (ac.signal.aborted || !data || typeof data !== 'object') return
+              const cfg = data.config ?? {}
+              const defs = {
+                maxInputBytes: data.defaults?.maxInputBytes ?? 6000,
+                maxOutputTokens: data.defaults?.maxOutputTokens ?? 4096,
+                timeoutMs: data.defaults?.timeoutMs ?? 30000,
+              }
+              const provs = Array.isArray(data.providers) ? data.providers : []
+              const hasPinned = typeof cfg.provider === 'string' && cfg.provider !== ''
+                && typeof cfg.model === 'string' && cfg.model !== ''
+              const initialProvider = hasPinned
+                ? cfg.provider
+                : (data.defaultRoute?.provider ?? provs[0]?.id ?? '')
+              const matchedProv = provs.find(p => p.id === initialProvider)
+              const initialModel = hasPinned
+                ? cfg.model
+                : (matchedProv?.models?.[0]?.id ?? data.defaultRoute?.model ?? '')
+              const inCatalog = Boolean(matchedProv?.models?.some(m => m.id === initialModel))
+              const useCustomModel = hasPinned
+                ? !inCatalog
+                : (!matchedProv || !Array.isArray(matchedProv.models) || matchedProv.models.length === 0)
+
+              const resolvedInputBytes = cfg.maxInputBytes ?? defs.maxInputBytes
+              const resolvedOutputTokens = cfg.maxOutputTokens ?? defs.maxOutputTokens
+              const resolvedTimeoutMs = cfg.timeoutMs ?? defs.timeoutMs
+
+              setEditable(data.editable !== false)
+              setDefaults(defs)
+              if (typeof data.maxTimeoutMs === 'number' && data.maxTimeoutMs > 0) {
+                setMaxTimeoutMs(data.maxTimeoutMs)
+              }
+              setProviders(provs)
+              setBaseline({
+                routeMode: hasPinned ? 'custom' : 'session',
+                provider: hasPinned ? cfg.provider : '',
+                model: hasPinned ? cfg.model : '',
+                maxInputBytes: resolvedInputBytes,
+                maxOutputTokens: resolvedOutputTokens,
+                timeoutMs: resolvedTimeoutMs,
+              })
+              setDraft({
+                routeMode: hasPinned ? 'custom' : 'session',
+                provider: initialProvider,
+                model: initialModel,
+                useCustomModel,
+                maxInputBytes: String(resolvedInputBytes),
+                maxOutputTokens: String(resolvedOutputTokens),
+                timeoutMs: String(resolvedTimeoutMs),
+              })
+              if (resolvedInputBytes !== defs.maxInputBytes
+                || resolvedOutputTokens !== defs.maxOutputTokens
+                || resolvedTimeoutMs !== defs.timeoutMs) {
+                setAdvancedOpen(true)
+              }
+              setLoadState('ready')
+            })
+            .catch((err) => {
+              if (ac.signal.aborted) return
+              if (err?.code === 'ROUTE_NOT_READY') {
+                setLoadError(translate('cfg.routeNotReady'))
+              } else {
+                setLoadError(err instanceof Error && err.message ? err.message : translate('cfg.loadError'))
+              }
+              setLoadState('error')
+            })
+
+          return () => { ac.abort() }
+        }, [reloadSeq])
+
+        React.useEffect(() => {
+          if (pendingCustomFocusRef.current) {
+            pendingCustomFocusRef.current = false
+            customModelInputRef.current?.focus?.()
+          }
+        }, [draft.useCustomModel])
+
+        if (loadState === 'loading') {
+          return h(
+            'div',
+            { className: 'dsh-nss-cfg-root', 'data-nss-config-card': 'loading' },
+            h('h4', { className: 'dsh-nss-cfg-title' }, translate('cfg.title')),
+            h('div', { className: 'dsh-nss-cfg-card' }, h('p', { className: 'dsh-nss-cfg-hint' }, translate('cfg.loading'))),
+          )
+        }
+
+        if (loadState === 'error') {
+          return h(
+            'div',
+            { className: 'dsh-nss-cfg-root', 'data-nss-config-card': 'error' },
+            h('h4', { className: 'dsh-nss-cfg-title' }, translate('cfg.title')),
+            h(
+              'div',
+              { className: 'dsh-nss-cfg-card' },
+              h('p', { className: 'dsh-nss-cfg-error', role: 'alert' }, loadError || translate('cfg.loadError')),
+              h(
+                'div',
+                { className: 'dsh-nss-cfg-buttons' },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsh-nss-cfg-btn',
+                    'data-nss-cfg-retry': '',
+                    onClick: () => { setReloadSeq(n => n + 1) },
+                  },
+                  translate('cfg.retry'),
+                ),
+              ),
+            ),
+          )
+        }
+
+        const parsedInputBytes = parsePositiveIntInput(draft.maxInputBytes)
+        const parsedOutputTokens = parsePositiveIntInput(draft.maxOutputTokens)
+        const parsedTimeoutMs = parsePositiveIntInput(draft.timeoutMs)
+        const limitsValid = parsedInputBytes !== null
+          && parsedOutputTokens !== null
+          && parsedTimeoutMs !== null
+          && parsedTimeoutMs <= maxTimeoutMs
+
+        const trimmedProvider = draft.provider.trim()
+        const trimmedModel = draft.model.trim()
+        const routeValid = draft.routeMode === 'session' || (trimmedProvider.length > 0 && trimmedModel.length > 0)
+        const formValid = limitsValid && routeValid
+
+        const isDirty = baseline !== null && (
+          baseline.routeMode !== draft.routeMode
+          || (draft.routeMode === 'custom' && (baseline.provider !== trimmedProvider || baseline.model !== trimmedModel))
+          || baseline.maxInputBytes !== parsedInputBytes
+          || baseline.maxOutputTokens !== parsedOutputTokens
+          || baseline.timeoutMs !== parsedTimeoutMs
+        )
+
+        const isAtDefaults = draft.routeMode === 'session'
+          && parsedInputBytes === defaults.maxInputBytes
+          && parsedOutputTokens === defaults.maxOutputTokens
+          && parsedTimeoutMs === defaults.timeoutMs
+
+        const currentProv = providers.find(p => p.id === draft.provider) ?? null
+        const hasCatalogModels = Boolean(currentProv && Array.isArray(currentProv.models) && currentProv.models.length > 0)
+        const providerOptions = [...providers]
+        if (draft.provider !== '' && !providerOptions.some(p => p.id === draft.provider)) {
+          providerOptions.unshift({ id: draft.provider, name: draft.provider, models: [] })
+        }
+
+        const updateDraft = (patch) => {
+          setFeedback(null)
+          setDraft(prev => ({ ...prev, ...patch }))
+        }
+
+        const onSelectRouteMode = (mode) => {
+          if (mode === 'custom') {
+            const fallbackProvId = draft.provider || providers[0]?.id || ''
+            const prov = providers.find(p => p.id === fallbackProvId)
+            const fallbackModel = draft.model || prov?.models?.[0]?.id || ''
+            const inCat = Boolean(prov?.models?.some(m => m.id === fallbackModel))
+            updateDraft({
+              routeMode: 'custom',
+              provider: fallbackProvId,
+              model: fallbackModel,
+              useCustomModel: !prov || prov.models.length === 0 || !inCat,
+            })
+          } else {
+            updateDraft({ routeMode: 'session' })
+          }
+        }
+
+        const onProviderChange = (nextProvId) => {
+          const prov = providers.find(p => p.id === nextProvId)
+          const firstModel = prov?.models?.[0]?.id ?? ''
+          updateDraft({
+            provider: nextProvId,
+            model: firstModel,
+            useCustomModel: !prov || !Array.isArray(prov.models) || prov.models.length === 0,
+          })
+        }
+
+        const onModelSelectChange = (val) => {
+          if (val === CUSTOM_MODEL_SENTINEL) {
+            const wasCatalogModel = Boolean(currentProv?.models?.some(m => m.id === draft.model))
+            pendingCustomFocusRef.current = true
+            updateDraft({
+              useCustomModel: true,
+              ...(wasCatalogModel ? { model: '' } : {}),
+            })
+          } else {
+            updateDraft({ useCustomModel: false, model: val })
+          }
+        }
+
+        const onResetDefaults = () => {
+          updateDraft({
+            routeMode: 'session',
+            maxInputBytes: String(defaults.maxInputBytes),
+            maxOutputTokens: String(defaults.maxOutputTokens),
+            timeoutMs: String(defaults.timeoutMs),
+          })
+        }
+
+        const onSave = () => {
+          if (!editable || saving || !formValid || !isDirty) return
+          setSaving(true)
+          setFeedback(null)
+          const payload = {
+            maxInputBytes: parsedInputBytes,
+            maxOutputTokens: parsedOutputTokens,
+            timeoutMs: parsedTimeoutMs,
+            provider: draft.routeMode === 'custom' ? trimmedProvider : null,
+            model: draft.routeMode === 'custom' ? trimmedModel : null,
+          }
+          saveConfigToHost(payload)
+            .then((res) => {
+              const saved = res?.config ?? payload
+              const savedCustom = typeof saved.provider === 'string' && saved.provider !== ''
+                && typeof saved.model === 'string' && saved.model !== ''
+              setBaseline({
+                routeMode: savedCustom ? 'custom' : 'session',
+                provider: savedCustom ? saved.provider : '',
+                model: savedCustom ? saved.model : '',
+                maxInputBytes: saved.maxInputBytes,
+                maxOutputTokens: saved.maxOutputTokens,
+                timeoutMs: saved.timeoutMs,
+              })
+              setFeedback({ kind: 'saved', text: translate('cfg.saved') })
+            })
+            .catch((err) => {
+              setFeedback({
+                kind: 'error',
+                text: err instanceof Error && err.message ? err.message : translate('cfg.loadError'),
+              })
+            })
+            .finally(() => {
+              setSaving(false)
+            })
+        }
+
+        const validationMessage = !routeValid
+          ? translate('cfg.invalidRoute')
+          : (!limitsValid ? translate('cfg.invalidLimits') : null)
+
+        const controlsDisabled = !editable || saving
+
+        return h(
+          'div',
+          { className: 'dsh-nss-cfg-root', 'data-nss-config-card': 'ready' },
+          h('h4', { className: 'dsh-nss-cfg-title' }, translate('cfg.title')),
+          h(
+            'div',
+            { className: 'dsh-nss-cfg-card' },
+            !editable
+              ? h('p', { className: 'dsh-nss-cfg-hint', role: 'status' }, translate('cfg.readOnly'))
+              : null,
+            h(
+              'fieldset',
+              { className: 'dsh-nss-cfg-group', disabled: controlsDisabled },
+              h('legend', { className: 'dsh-nss-cfg-legend' }, translate('cfg.routeLabel')),
+              h(
+                'label',
+                { className: 'dsh-nss-cfg-radio' },
+                h('input', {
+                  type: 'radio',
+                  name: 'dsh-nss-route-mode',
+                  'data-nss-cfg-mode': 'session',
+                  checked: draft.routeMode === 'session',
+                  onChange: () => onSelectRouteMode('session'),
+                }),
+                h(
+                  'span',
+                  { className: 'dsh-nss-cfg-radio-copy' },
+                  h('span', null, translate('cfg.routeSession')),
+                  h('span', { className: 'dsh-nss-cfg-hint' }, translate('cfg.routeSessionHint')),
+                ),
+              ),
+              h(
+                'label',
+                { className: 'dsh-nss-cfg-radio' },
+                h('input', {
+                  type: 'radio',
+                  name: 'dsh-nss-route-mode',
+                  'data-nss-cfg-mode': 'custom',
+                  checked: draft.routeMode === 'custom',
+                  onChange: () => onSelectRouteMode('custom'),
+                }),
+                h(
+                  'span',
+                  { className: 'dsh-nss-cfg-radio-copy' },
+                  h('span', null, translate('cfg.routeCustom')),
+                  h('span', { className: 'dsh-nss-cfg-hint' }, translate('cfg.routeCustomHint')),
+                ),
+              ),
+            ),
+            draft.routeMode === 'custom'
+              ? h(
+                  'div',
+                  { className: 'dsh-nss-cfg-grid', 'data-nss-cfg-route-fields': '' },
+                  h(
+                    'div',
+                    { className: 'dsh-nss-cfg-field' },
+                    h('label', { htmlFor: `${idPrefix}-provider` }, translate('cfg.provider')),
+                    providerOptions.length > 0
+                      ? h(
+                          'select',
+                          {
+                            id: `${idPrefix}-provider`,
+                            className: 'dsh-nss-cfg-control',
+                            'data-nss-cfg-provider-select': '',
+                            disabled: controlsDisabled,
+                            value: draft.provider,
+                            onChange: ev => onProviderChange(ev.target.value),
+                          },
+                          ...providerOptions.map(p =>
+                            h('option', { key: p.id, value: p.id }, p.name && p.name !== p.id ? `${p.name} (${p.id})` : p.id),
+                          ),
+                        )
+                      : h('input', {
+                          id: `${idPrefix}-provider`,
+                          type: 'text',
+                          className: 'dsh-nss-cfg-control',
+                          'data-nss-cfg-provider-input': '',
+                          disabled: controlsDisabled,
+                          value: draft.provider,
+                          placeholder: translate('cfg.providerPlaceholder'),
+                          onChange: ev => updateDraft({ provider: ev.target.value }),
+                        }),
+                  ),
+                  h(
+                    'div',
+                    { className: 'dsh-nss-cfg-field' },
+                    h('label', { htmlFor: `${idPrefix}-model` }, translate('cfg.model')),
+                    hasCatalogModels
+                      ? h(
+                          'select',
+                          {
+                            id: `${idPrefix}-model`,
+                            className: 'dsh-nss-cfg-control',
+                            'data-nss-cfg-model-select': '',
+                            disabled: controlsDisabled,
+                            value: draft.useCustomModel ? CUSTOM_MODEL_SENTINEL : draft.model,
+                            onChange: ev => onModelSelectChange(ev.target.value),
+                          },
+                          ...currentProv.models.map(m =>
+                            h('option', { key: m.id, value: m.id }, m.name && m.name !== m.id ? `${m.name} (${m.id})` : m.id),
+                          ),
+                          h('option', { key: CUSTOM_MODEL_SENTINEL, value: CUSTOM_MODEL_SENTINEL }, translate('cfg.modelCustomOption')),
+                        )
+                      : null,
+                    !hasCatalogModels || draft.useCustomModel
+                      ? h('input', {
+                          id: hasCatalogModels ? `${idPrefix}-model-custom` : `${idPrefix}-model`,
+                          ref: customModelInputRef,
+                          type: 'text',
+                          className: 'dsh-nss-cfg-control',
+                          'data-nss-cfg-model-input': '',
+                          'aria-label': translate('cfg.modelPlaceholder'),
+                          disabled: controlsDisabled,
+                          value: draft.model,
+                          placeholder: translate('cfg.modelPlaceholder'),
+                          onChange: ev => updateDraft({ model: ev.target.value }),
+                        })
+                      : null,
+                  ),
+                )
+              : null,
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dsh-nss-cfg-adv-toggle',
+                'data-nss-cfg-adv-toggle': '',
+                'aria-expanded': advancedOpen,
+                onClick: () => { setAdvancedOpen(open => !open) },
+              },
+              `${advancedOpen ? '▾' : '▸'} ${translate('cfg.advancedToggle')} (${draft.timeoutMs} ms · ${draft.maxInputBytes} B · ${draft.maxOutputTokens} tok)`,
+            ),
+            advancedOpen
+              ? h(
+                  'div',
+                  { className: 'dsh-nss-cfg-grid', 'data-nss-cfg-adv-fields': '' },
+                  h(
+                    'div',
+                    { className: 'dsh-nss-cfg-field' },
+                    h('label', { htmlFor: `${idPrefix}-timeout` }, translate('cfg.timeoutMs')),
+                    h('input', {
+                      id: `${idPrefix}-timeout`,
+                      type: 'number',
+                      min: 1,
+                      max: maxTimeoutMs,
+                      step: 1000,
+                      className: 'dsh-nss-cfg-control',
+                      'data-nss-cfg-timeout': '',
+                      disabled: controlsDisabled,
+                      value: draft.timeoutMs,
+                      onChange: ev => updateDraft({ timeoutMs: ev.target.value }),
+                    }),
+                  ),
+                  h(
+                    'div',
+                    { className: 'dsh-nss-cfg-field' },
+                    h('label', { htmlFor: `${idPrefix}-input-bytes` }, translate('cfg.maxInputBytes')),
+                    h('input', {
+                      id: `${idPrefix}-input-bytes`,
+                      type: 'number',
+                      min: 1,
+                      step: 500,
+                      className: 'dsh-nss-cfg-control',
+                      'data-nss-cfg-input-bytes': '',
+                      disabled: controlsDisabled,
+                      value: draft.maxInputBytes,
+                      onChange: ev => updateDraft({ maxInputBytes: ev.target.value }),
+                    }),
+                  ),
+                  h(
+                    'div',
+                    { className: 'dsh-nss-cfg-field' },
+                    h('label', { htmlFor: `${idPrefix}-output-tokens` }, translate('cfg.maxOutputTokens')),
+                    h('input', {
+                      id: `${idPrefix}-output-tokens`,
+                      type: 'number',
+                      min: 1,
+                      step: 256,
+                      className: 'dsh-nss-cfg-control',
+                      'data-nss-cfg-output-tokens': '',
+                      disabled: controlsDisabled,
+                      value: draft.maxOutputTokens,
+                      onChange: ev => updateDraft({ maxOutputTokens: ev.target.value }),
+                    }),
+                  ),
+                )
+              : null,
+            h(
+              'div',
+              { className: 'dsh-nss-cfg-actions' },
+              validationMessage !== null
+                ? h('p', { className: 'dsh-nss-cfg-error', role: 'alert' }, validationMessage)
+                : feedback !== null
+                  ? h(
+                      'p',
+                      {
+                        className: feedback.kind === 'error' ? 'dsh-nss-cfg-error' : 'dsh-nss-cfg-status',
+                        role: feedback.kind === 'error' ? 'alert' : 'status',
+                      },
+                      feedback.text,
+                    )
+                  : h('span', null),
+              h(
+                'div',
+                { className: 'dsh-nss-cfg-buttons' },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsh-nss-cfg-btn',
+                    'data-nss-cfg-reset': '',
+                    disabled: controlsDisabled || isAtDefaults,
+                    onClick: onResetDefaults,
+                  },
+                  translate('cfg.reset'),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsh-nss-cfg-btn dsh-nss-cfg-btn-primary',
+                    'data-nss-cfg-save': '',
+                    disabled: controlsDisabled || !formValid || !isDirty,
+                    onClick: onSave,
+                  },
+                  saving ? translate('cfg.saving') : translate('cfg.save'),
+                ),
+              ),
+            ),
+          ),
+        )
+      }
+
+      ctx.effect(
+        () => ctx.slots.inject('plugins.bundle.config', () =>
+          ctx.slots.register(
+            {
+              name: 'plugins.bundle.config',
+              key: PLUGIN_ID,
+              locale: LOCALE_NS,
+            },
+            BundleConfigCard,
+          ),
+        ),
+        'next-step-suggestion: bundle config registration',
+      )
 
       ctx.effect(
         () => ctx.slots.inject('conversation.input.overlay', () =>

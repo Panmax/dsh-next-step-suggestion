@@ -6,44 +6,111 @@
 export const PLUGIN_ID = 'dsh-next-step-suggestion'
 export const LOCALE_NS = 'next-step-suggestion'
 export const SUGGEST_ENDPOINT = '/api/next-step-suggestion/suggest'
+export const CONFIG_ENDPOINT = '/api/next-step-suggestion/config'
+
+const CONFIG_STRINGS_EN = {
+  'cfg.title': 'Configuration',
+  'cfg.loading': 'Loading configuration…',
+  'cfg.retry': 'Retry',
+  'cfg.loadError': 'Failed to load configuration.',
+  'cfg.routeNotReady': 'Host config endpoint is not active yet — toggle this plugin off and on (or restart DSH), then click Retry.',
+  'cfg.readOnly': 'This profile does not support editing configuration from the UI.',
+  'cfg.routeLabel': 'Suggestion model route',
+  'cfg.routeSession': 'Follow active session model (default)',
+  'cfg.routeSessionHint': 'Uses whichever model the active conversation already selected.',
+  'cfg.routeCustom': 'Pin dedicated lightweight model',
+  'cfg.routeCustomHint': 'Routes background suggestion calls to a fast, low-cost model.',
+  'cfg.provider': 'Provider',
+  'cfg.providerPlaceholder': 'Enter provider ID (e.g. deepseek)',
+  'cfg.model': 'Model',
+  'cfg.modelCustomOption': 'Custom model ID…',
+  'cfg.modelPlaceholder': 'Enter model ID (e.g. deepseek-chat)',
+  'cfg.advancedToggle': 'Advanced limits',
+  'cfg.timeoutMs': 'Timeout (ms)',
+  'cfg.maxInputBytes': 'Max input (UTF-8 bytes)',
+  'cfg.maxOutputTokens': 'Max output tokens',
+  'cfg.reset': 'Reset to defaults',
+  'cfg.save': 'Save',
+  'cfg.saving': 'Saving…',
+  'cfg.saved': 'Saved and applied.',
+  'cfg.invalidRoute': 'Select or enter both provider and model ID.',
+  'cfg.invalidLimits': 'Limits must be positive integers (timeout ≤ 300000 ms).',
+}
+
+const CONFIG_STRINGS_ZH = {
+  'cfg.title': '插件配置',
+  'cfg.loading': '正在读取配置…',
+  'cfg.retry': '重试',
+  'cfg.loadError': '读取配置失败。',
+  'cfg.routeNotReady': '后端配置接口尚未激活，请在插件页重新开关一次本插件（或重启 dsh）后点击重试。',
+  'cfg.readOnly': '当前运行环境不支持在界面中写入 Profile 配置。',
+  'cfg.routeLabel': '建议生成模型路由',
+  'cfg.routeSession': '跟随当前会话模型（默认）',
+  'cfg.routeSessionHint': '自动使用当前前台对话所选的模型。',
+  'cfg.routeCustom': '指定固定轻量模型',
+  'cfg.routeCustomHint': '将后台建议生成固定路由至低延迟、低成本模型（如 Flash / deepseek-chat）。',
+  'cfg.provider': '模型提供商（Provider）',
+  'cfg.providerPlaceholder': '输入提供商 ID（如 deepseek）',
+  'cfg.model': '模型（Model）',
+  'cfg.modelCustomOption': '自定义模型 ID…',
+  'cfg.modelPlaceholder': '输入模型 ID（如 deepseek-chat）',
+  'cfg.advancedToggle': '高级限额参数',
+  'cfg.timeoutMs': '请求超时（毫秒）',
+  'cfg.maxInputBytes': '最大输入摘要（UTF-8 字节）',
+  'cfg.maxOutputTokens': '最大输出 Token 上限',
+  'cfg.reset': '恢复默认',
+  'cfg.save': '保存配置',
+  'cfg.saving': '保存中…',
+  'cfg.saved': '已保存并实时生效。',
+  'cfg.invalidRoute': '请同时填写有效的 Provider 与 Model ID。',
+  'cfg.invalidLimits': '限额参数须为正整数（超时不超过 300000 毫秒）。',
+}
 
 export const LOCALES = {
   zh: {
+    ...CONFIG_STRINGS_ZH,
     'tab.hint': 'Tab',
     'accept.label': '采纳下一步建议',
     'preview.aria': '下一步建议：{text}，按 Tab 或点击徽章接受，按 Esc 关闭',
   },
   en: {
+    ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': 'Accept next-step suggestion',
     'preview.aria': 'Next-step suggestion: {text}. Press Tab or click badge to accept, or Esc to dismiss.',
   },
   ja: {
+    ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': '次のステップの提案を採用',
     'preview.aria': '次のステップの提案: {text}（Tabまたはクリックで採用、Escで閉じる）',
   },
   es: {
+    ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': 'Aceptar sugerencia siguiente',
     'preview.aria': 'Sugerencia siguiente: {text}. Pulsa Tab o haz clic para aceptar, o Esc para cerrar.',
   },
   fr: {
+    ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': 'Accepter la suggestion suivante',
     'preview.aria': 'Suggestion suivante : {text}. Appuyez sur Tab ou cliquez pour accepter, ou Échap pour fermer.',
   },
   de: {
+    ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': 'Vorschlag übernehmen',
     'preview.aria': 'Nächster Schritt: {text}. Tab oder Klick zum Übernehmen, Esc zum Schließen.',
   },
   ru: {
+    ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': 'Принять предложение',
     'preview.aria': 'Следующий шаг: {text}. Нажмите Tab или кнопку, чтобы принять, или Esc, чтобы скрыть.',
   },
   pt: {
+    ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': 'Aceitar próxima sugestão',
     'preview.aria': 'Próxima sugestão: {text}. Pressione Tab ou clique para aceitar, ou Esc para fechar.',
@@ -114,6 +181,10 @@ export const SUGGESTION_CSS = `
   cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
+.dsh-nss-kbd:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 1px;
+}
 @media (hover: hover) {
   .dsh-nss-kbd:hover {
     background: var(--dsw-alias-interactive-bg-hover);
@@ -133,6 +204,196 @@ export const SUGGESTION_CSS = `
   .dsh-nss-kbd {
     transition: none;
   }
+}
+.dsh-nss-cfg-root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-family: var(--dsw-font-family);
+  color: var(--dsw-alias-label-primary);
+}
+.dsh-nss-cfg-title {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+.dsh-nss-cfg-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--dsw-radius-lg, 10px);
+  background: var(--dsw-alias-bg-layer-1);
+}
+.dsh-nss-cfg-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.dsh-nss-cfg-legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+.dsh-nss-cfg-radio {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 20px;
+}
+.dsh-nss-cfg-radio input {
+  margin: 3px 0 0;
+  accent-color: var(--dsw-alias-state-business-primary);
+}
+.dsh-nss-cfg-radio-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.dsh-nss-cfg-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+.dsh-nss-cfg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.dsh-nss-cfg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dsh-nss-cfg-field label {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh-nss-cfg-control {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: var(--dsw-radius-sm, 6px);
+  background: var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-1));
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  outline: none;
+}
+.dsh-nss-cfg-control:focus-visible {
+  border-color: var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: -1px;
+}
+.dsh-nss-cfg-control:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+@media (pointer: coarse) {
+  .dsh-nss-cfg-control {
+    font-size: 16px;
+    height: 36px;
+  }
+}
+.dsh-nss-cfg-adv-toggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border-radius: var(--dsw-radius-sm, 4px);
+  border: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.dsh-nss-cfg-adv-toggle:focus-visible,
+.dsh-nss-cfg-btn:focus-visible {
+  outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
+}
+.dsh-nss-cfg-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
+}
+.dsh-nss-cfg-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.dsh-nss-cfg-btn {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--dsw-radius-sm, 6px);
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.dsh-nss-cfg-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+@media (hover: hover) {
+  .dsh-nss-cfg-btn:hover:not(:disabled) {
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
+}
+.dsh-nss-cfg-btn-primary {
+  border-color: var(--dsw-alias-button-primary-fill);
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+@media (hover: hover) {
+  .dsh-nss-cfg-btn-primary:hover:not(:disabled) {
+    background: var(--dsw-alias-button-primary-fill);
+    opacity: 0.9;
+  }
+}
+.dsh-nss-cfg-status {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+.dsh-nss-cfg-error {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-state-error-primary);
 }
 `
 
@@ -171,6 +432,7 @@ export function isComposerInteractive(env) {
   if (env.composerTakenOver) return false
   if (env.planActive) return false
   if (env.goalActive) return false
+  if (env.backgroundWorkRunning) return false
   return true
 }
 
