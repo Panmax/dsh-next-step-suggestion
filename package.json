@@ -2,7 +2,16 @@
   "name": "dsh-next-step-suggestion",
   "version": "0.1.0",
   "description": "Show a ghost next-step prompt suggestion in an empty composer after an agent turn finishes; press Tab to accept into an editable draft.",
+  "author": "Panmax",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Panmax/dsh-next-step-suggestion.git"
+  },
+  "homepage": "https://github.com/Panmax/dsh-next-step-suggestion#readme",
+  "bugs": {
+    "url": "https://github.com/Panmax/dsh-next-step-suggestion/issues"
+  },
   "type": "module",
   "icon": "./icon.svg",
   "keywords": [
