@@ -10,52 +10,66 @@ export const SUGGEST_ENDPOINT = '/api/next-step-suggestion/suggest'
 export const LOCALES = {
   zh: {
     'tab.hint': 'Tab',
-    'preview.aria': '下一步建议：{text}，按 Tab 接受，按 Esc 关闭',
+    'accept.label': '采纳下一步建议',
+    'preview.aria': '下一步建议：{text}，按 Tab 或点击徽章接受，按 Esc 关闭',
   },
   en: {
     'tab.hint': 'Tab',
-    'preview.aria': 'Next-step suggestion: {text}. Press Tab to accept or Esc to dismiss.',
+    'accept.label': 'Accept next-step suggestion',
+    'preview.aria': 'Next-step suggestion: {text}. Press Tab or click badge to accept, or Esc to dismiss.',
   },
   ja: {
     'tab.hint': 'Tab',
-    'preview.aria': '次のステップの提案: {text}（Tabで採用、Escで閉じる）',
+    'accept.label': '次のステップの提案を採用',
+    'preview.aria': '次のステップの提案: {text}（Tabまたはクリックで採用、Escで閉じる）',
   },
   es: {
     'tab.hint': 'Tab',
-    'preview.aria': 'Sugerencia siguiente: {text}. Pulsa Tab para aceptar o Esc para cerrar.',
+    'accept.label': 'Aceptar sugerencia siguiente',
+    'preview.aria': 'Sugerencia siguiente: {text}. Pulsa Tab o haz clic para aceptar, o Esc para cerrar.',
   },
   fr: {
     'tab.hint': 'Tab',
-    'preview.aria': 'Suggestion suivante : {text}. Appuyez sur Tab pour accepter ou Échap pour fermer.',
+    'accept.label': 'Accepter la suggestion suivante',
+    'preview.aria': 'Suggestion suivante : {text}. Appuyez sur Tab ou cliquez pour accepter, ou Échap pour fermer.',
   },
   de: {
     'tab.hint': 'Tab',
-    'preview.aria': 'Nächster Schritt: {text}. Tab zum Übernehmen, Esc zum Schließen.',
+    'accept.label': 'Vorschlag übernehmen',
+    'preview.aria': 'Nächster Schritt: {text}. Tab oder Klick zum Übernehmen, Esc zum Schließen.',
   },
   ru: {
     'tab.hint': 'Tab',
-    'preview.aria': 'Следующий шаг: {text}. Нажмите Tab, чтобы принять, или Esc, чтобы скрыть.',
+    'accept.label': 'Принять предложение',
+    'preview.aria': 'Следующий шаг: {text}. Нажмите Tab или кнопку, чтобы принять, или Esc, чтобы скрыть.',
   },
   pt: {
     'tab.hint': 'Tab',
-    'preview.aria': 'Próxima sugestão: {text}. Pressione Tab para aceitar ou Esc para fechar.',
+    'accept.label': 'Aceitar próxima sugestão',
+    'preview.aria': 'Próxima sugestão: {text}. Pressione Tab ou clique para aceitar, ou Esc para fechar.',
   },
 }
 
 /**
  * Theme-token-only CSS rules. Hides the native composer placeholder only while an active
- * ghost suggestion is rendered inside the same composer card, and hides the ghost suggestion
- * immediately if IME composition starts.
+ * ghost suggestion is rendered inside an editable, decorator-free composer card, and hides
+ * the ghost suggestion immediately if IME composition starts, the editor becomes disabled,
+ * or inline quote/reference chips appear.
  */
 export const SUGGESTION_CSS = `
-[data-composer-card]:has([data-next-step-suggestion-active]) [data-composer-placeholder] {
+[data-composer-card]:has([data-next-step-suggestion-active]):not(:has([data-composer-input][aria-disabled="true"])):not(:has([data-composer-input][contenteditable="false"])):not(:has([data-composer-quote], [data-composer-chip], [data-composer-command], [data-lexical-decorator])) [data-composer-placeholder] {
   visibility: hidden !important;
 }
-[data-composer-card]:has([data-composer-composing]) [data-next-step-suggestion-active] {
+[data-composer-card]:has([data-composer-composing], [data-composer-input][aria-disabled="true"], [data-composer-input][contenteditable="false"], [data-composer-quote], [data-composer-chip], [data-composer-command], [data-lexical-decorator]) [data-next-step-suggestion-active] {
   visibility: hidden !important;
+  pointer-events: none !important;
+}
+[data-composer-card]:has([data-composer-composing], [data-composer-input][aria-disabled="true"], [data-composer-input][contenteditable="false"], [data-composer-quote], [data-composer-chip], [data-composer-command], [data-lexical-decorator]) [data-next-step-suggestion-active] .dsh-nss-kbd {
+  pointer-events: none !important;
 }
 .dsh-nss-ghost {
   position: absolute;
+  z-index: 2;
   left: 0;
   right: 4px;
   display: flex;
@@ -77,20 +91,48 @@ export const SUGGESTION_CSS = `
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  pointer-events: none;
 }
 .dsh-nss-kbd {
+  appearance: none;
+  margin: 0;
   flex: none;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   height: 18px;
   padding: 0 5px;
   border-radius: var(--dsw-radius-sm, 4px);
   border: 1px solid var(--dsw-alias-border-l2);
   background: var(--dsw-specific-selector);
   color: var(--dsw-alias-label-tertiary);
+  font-family: inherit;
   font-size: 11px;
   line-height: 16px;
   font-weight: 500;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+@media (hover: hover) {
+  .dsh-nss-kbd:hover {
+    background: var(--dsw-alias-interactive-bg-hover);
+    border-color: var(--dsw-alias-border-l4);
+    color: var(--dsw-alias-label-secondary);
+  }
+}
+@media (pointer: coarse) {
+  .dsh-nss-kbd {
+    height: 24px;
+    padding: 0 8px;
+    font-size: 12px;
+    line-height: 22px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dsh-nss-kbd {
+    transition: none;
+  }
 }
 `
 
@@ -111,17 +153,33 @@ export function isSessionDraftClean(env) {
   if (env.phase !== 'plain') return false
   if (env.draft !== '') return false
   if (env.hasAttachments) return false
+  if (env.hasInlineDecorators) return false
   if (env.composing) return false
   return true
 }
 
 /**
- * Check whether an environment snapshot is both foreground and clean to request or display a suggestion.
+ * Check whether the composer surface is foreground, editable, authorized for prompting,
+ * and not hidden beneath a `conversation.composer` takeover card.
+ * @param {Record<string, any> | null} env
+ * @returns {boolean}
+ */
+export function isComposerInteractive(env) {
+  if (!env?.foreground) return false
+  if (env.editorEditable === false) return false
+  if (env.promptAllowed === false) return false
+  if (env.composerTakenOver) return false
+  if (env.planActive) return false
+  return true
+}
+
+/**
+ * Check whether an environment snapshot is both interactive and clean to request or display a suggestion.
  * @param {Record<string, any> | null} env
  * @returns {boolean}
  */
 export function isSnapshotCleanForSuggestion(env) {
-  return Boolean(env?.foreground) && isSessionDraftClean(env)
+  return isComposerInteractive(env) && isSessionDraftClean(env)
 }
 
 /**
@@ -417,8 +475,8 @@ export function createClientSuggestionMachine(deps) {
 
       // Backfill if this session completed a turn in the background (either `sawRunning` was armed before
       // switching away / via sidebar session list, or Host observed a live `turn/end` while another session was open).
-      // Keep `sawRunning` intact if this initial mount frame is not yet foreground-ready.
-      if (nextEnv.foreground && !nextEnv.popupOpen) {
+      // Keep `sawRunning` intact if this initial mount frame is not yet interactive.
+      if (isComposerInteractive(nextEnv) && !nextEnv.popupOpen) {
         const wasSawRunning = slot.sawRunning
         slot.sawRunning = false
         startSuggestionFetch(sessionId, slot, nextEnv, {
@@ -451,8 +509,11 @@ export function createClientSuggestionMachine(deps) {
       return
     }
 
+    const wasInteractive = prevSlotEnv ? isComposerInteractive(prevSlotEnv) : false
+    const nowInteractive = isComposerInteractive(nextEnv)
+
     // 4. Same session remained idle: check if user edited draft (including type-then-delete via draftRev),
-    //    submitted, or hit an error; also backfill if returning from a non-chat panel (e.g. Settings closed).
+    //    inserted quote/reference chips, submitted, or hit an error; also re-render or backfill on interactivity transitions.
     if (!slot.epochInvalidated) {
       const draftMutated = slot.baselineDraftRev !== null && nextEnv.draftRev !== slot.baselineDraftRev
       if (draftMutated || !isSessionDraftClean(nextEnv)) {
@@ -460,15 +521,15 @@ export function createClientSuggestionMachine(deps) {
         return
       }
       if ((prevEnv && Boolean(prevEnv.popupOpen) !== Boolean(nextEnv.popupOpen))
-        || (prevSlotEnv && Boolean(prevSlotEnv.foreground) !== Boolean(nextEnv.foreground))) {
+        || (prevSlotEnv && wasInteractive !== nowInteractive)) {
         notify()
       }
       return
     }
 
-    // If user returned from Settings/Plugins panel or initial hydration (`foreground: false -> true`)
-    // to an idle session whose turn finished while non-foreground, backfill once.
-    if (prevSlotEnv && !prevSlotEnv.foreground && nextEnv.foreground
+    // If user returned from Settings/Plugins panel, initial hydration, or cleared a temporary composer block/takeover
+    // (`isComposerInteractive: false -> true`) to an idle session whose turn finished while non-interactive, backfill once.
+    if (prevSlotEnv && !wasInteractive && nowInteractive
       && isSnapshotCleanForSuggestion(nextEnv) && !nextEnv.popupOpen
       && slot.activeSuggestion === null && slot.activeAbort === null) {
       const wasSawRunning = slot.sawRunning
@@ -492,7 +553,7 @@ export function createClientSuggestionMachine(deps) {
   }
 
   /**
-   * Whether the gray ghost preview should currently render and accept Tab for the given environment.
+   * Whether the gray ghost preview should currently render and accept Tab/click for the given environment.
    * @param {Record<string, any> | null} [liveEnv]
    * @returns {boolean}
    */
@@ -529,6 +590,31 @@ export function createClientSuggestionMachine(deps) {
   }
 
   /**
+   * Accept the currently visible suggestion into the composer draft without submitting.
+   * Shared by `Tab` keydown and direct `Tab` badge click/tap.
+   *
+   * @param {{
+   *   acceptDraft: (text: string) => void,
+   *   focusEditor?: () => void,
+   *   liveEnv?: Record<string, any> | null,
+   * }} context
+   * @returns {boolean} true if accepted
+   */
+  function acceptSuggestion(context) {
+    if (disposed || !context || typeof context.acceptDraft !== 'function') return false
+    const env = context.liveEnv ?? currentEnv
+    if (!isPreviewVisible(env)) return false
+    const slot = slots.get(env.sessionId)
+    if (!slot || slot.activeSuggestion === null) return false
+
+    const acceptedText = slot.activeSuggestion.text
+    invalidateSessionTurn(env.sessionId)
+    context.acceptDraft(acceptedText)
+    context.focusEditor?.()
+    return true
+  }
+
+  /**
    * Arbitrate a bubble-phase `keydown` event on the composer card.
    * Only consumes `Tab` (accept) or `Escape` (dismiss) when preview is visible,
    * the composer editor holds focus, and no prior handler/popup claimed the event.
@@ -537,6 +623,7 @@ export function createClientSuggestionMachine(deps) {
    * @param {{
    *   isEditorFocused: boolean,
    *   acceptDraft: (text: string) => void,
+   *   focusEditor?: () => void,
    *   liveEnv?: Record<string, any> | null,
    * }} context
    * @returns {boolean} true if consumed
@@ -556,12 +643,9 @@ export function createClientSuggestionMachine(deps) {
     if (!slot || slot.activeSuggestion === null) return false
 
     if (event.key === 'Tab') {
-      const acceptedText = slot.activeSuggestion.text
       event.preventDefault?.()
       event.stopPropagation?.()
-      invalidateSessionTurn(env.sessionId)
-      context.acceptDraft(acceptedText)
-      return true
+      return acceptSuggestion(context)
     }
 
     if (event.key === 'Escape') {
@@ -593,6 +677,7 @@ export function createClientSuggestionMachine(deps) {
     notifyUserEditIntent,
     isPreviewVisible,
     getVisibleSuggestion,
+    acceptSuggestion,
     handleKeyDown,
     invalidateCurrentTurn,
     dispose,

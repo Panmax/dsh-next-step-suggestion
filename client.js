@@ -14,52 +14,66 @@ const SUGGEST_ENDPOINT = '/api/next-step-suggestion/suggest'
 const LOCALES = {
   zh: {
     'tab.hint': 'Tab',
-    'preview.aria': '下一步建议：{text}，按 Tab 接受，按 Esc 关闭',
+    'accept.label': '采纳下一步建议',
+    'preview.aria': '下一步建议：{text}，按 Tab 或点击徽章接受，按 Esc 关闭',
   },
   en: {
     'tab.hint': 'Tab',
-    'preview.aria': 'Next-step suggestion: {text}. Press Tab to accept or Esc to dismiss.',
+    'accept.label': 'Accept next-step suggestion',
+    'preview.aria': 'Next-step suggestion: {text}. Press Tab or click badge to accept, or Esc to dismiss.',
   },
   ja: {
     'tab.hint': 'Tab',
-    'preview.aria': '次のステップの提案: {text}（Tabで採用、Escで閉じる）',
+    'accept.label': '次のステップの提案を採用',
+    'preview.aria': '次のステップの提案: {text}（Tabまたはクリックで採用、Escで閉じる）',
   },
   es: {
     'tab.hint': 'Tab',
-    'preview.aria': 'Sugerencia siguiente: {text}. Pulsa Tab para aceptar o Esc para cerrar.',
+    'accept.label': 'Aceptar sugerencia siguiente',
+    'preview.aria': 'Sugerencia siguiente: {text}. Pulsa Tab o haz clic para aceptar, o Esc para cerrar.',
   },
   fr: {
     'tab.hint': 'Tab',
-    'preview.aria': 'Suggestion suivante : {text}. Appuyez sur Tab pour accepter ou Échap pour fermer.',
+    'accept.label': 'Accepter la suggestion suivante',
+    'preview.aria': 'Suggestion suivante : {text}. Appuyez sur Tab ou cliquez pour accepter, ou Échap pour fermer.',
   },
   de: {
     'tab.hint': 'Tab',
-    'preview.aria': 'Nächster Schritt: {text}. Tab zum Übernehmen, Esc zum Schließen.',
+    'accept.label': 'Vorschlag übernehmen',
+    'preview.aria': 'Nächster Schritt: {text}. Tab oder Klick zum Übernehmen, Esc zum Schließen.',
   },
   ru: {
     'tab.hint': 'Tab',
-    'preview.aria': 'Следующий шаг: {text}. Нажмите Tab, чтобы принять, или Esc, чтобы скрыть.',
+    'accept.label': 'Принять предложение',
+    'preview.aria': 'Следующий шаг: {text}. Нажмите Tab или кнопку, чтобы принять, или Esc, чтобы скрыть.',
   },
   pt: {
     'tab.hint': 'Tab',
-    'preview.aria': 'Próxima sugestão: {text}. Pressione Tab para aceitar ou Esc para fechar.',
+    'accept.label': 'Aceitar próxima sugestão',
+    'preview.aria': 'Próxima sugestão: {text}. Pressione Tab ou clique para aceitar, ou Esc para fechar.',
   },
 }
 
 /**
  * Theme-token-only CSS rules. Hides the native composer placeholder only while an active
- * ghost suggestion is rendered inside the same composer card, and hides the ghost suggestion
- * immediately if IME composition starts.
+ * ghost suggestion is rendered inside an editable, decorator-free composer card, and hides
+ * the ghost suggestion immediately if IME composition starts, the editor becomes disabled,
+ * or inline quote/reference chips appear.
  */
 const SUGGESTION_CSS = `
-[data-composer-card]:has([data-next-step-suggestion-active]) [data-composer-placeholder] {
+[data-composer-card]:has([data-next-step-suggestion-active]):not(:has([data-composer-input][aria-disabled="true"])):not(:has([data-composer-input][contenteditable="false"])):not(:has([data-composer-quote], [data-composer-chip], [data-composer-command], [data-lexical-decorator])) [data-composer-placeholder] {
   visibility: hidden !important;
 }
-[data-composer-card]:has([data-composer-composing]) [data-next-step-suggestion-active] {
+[data-composer-card]:has([data-composer-composing], [data-composer-input][aria-disabled="true"], [data-composer-input][contenteditable="false"], [data-composer-quote], [data-composer-chip], [data-composer-command], [data-lexical-decorator]) [data-next-step-suggestion-active] {
   visibility: hidden !important;
+  pointer-events: none !important;
+}
+[data-composer-card]:has([data-composer-composing], [data-composer-input][aria-disabled="true"], [data-composer-input][contenteditable="false"], [data-composer-quote], [data-composer-chip], [data-composer-command], [data-lexical-decorator]) [data-next-step-suggestion-active] .dsh-nss-kbd {
+  pointer-events: none !important;
 }
 .dsh-nss-ghost {
   position: absolute;
+  z-index: 2;
   left: 0;
   right: 4px;
   display: flex;
@@ -81,20 +95,48 @@ const SUGGESTION_CSS = `
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  pointer-events: none;
 }
 .dsh-nss-kbd {
+  appearance: none;
+  margin: 0;
   flex: none;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   height: 18px;
   padding: 0 5px;
   border-radius: var(--dsw-radius-sm, 4px);
   border: 1px solid var(--dsw-alias-border-l2);
   background: var(--dsw-specific-selector);
   color: var(--dsw-alias-label-tertiary);
+  font-family: inherit;
   font-size: 11px;
   line-height: 16px;
   font-weight: 500;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+@media (hover: hover) {
+  .dsh-nss-kbd:hover {
+    background: var(--dsw-alias-interactive-bg-hover);
+    border-color: var(--dsw-alias-border-l4);
+    color: var(--dsw-alias-label-secondary);
+  }
+}
+@media (pointer: coarse) {
+  .dsh-nss-kbd {
+    height: 24px;
+    padding: 0 8px;
+    font-size: 12px;
+    line-height: 22px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dsh-nss-kbd {
+    transition: none;
+  }
 }
 `
 
@@ -115,17 +157,33 @@ function isSessionDraftClean(env) {
   if (env.phase !== 'plain') return false
   if (env.draft !== '') return false
   if (env.hasAttachments) return false
+  if (env.hasInlineDecorators) return false
   if (env.composing) return false
   return true
 }
 
 /**
- * Check whether an environment snapshot is both foreground and clean to request or display a suggestion.
+ * Check whether the composer surface is foreground, editable, authorized for prompting,
+ * and not hidden beneath a `conversation.composer` takeover card.
+ * @param {Record<string, any> | null} env
+ * @returns {boolean}
+ */
+function isComposerInteractive(env) {
+  if (!env?.foreground) return false
+  if (env.editorEditable === false) return false
+  if (env.promptAllowed === false) return false
+  if (env.composerTakenOver) return false
+  if (env.planActive) return false
+  return true
+}
+
+/**
+ * Check whether an environment snapshot is both interactive and clean to request or display a suggestion.
  * @param {Record<string, any> | null} env
  * @returns {boolean}
  */
 function isSnapshotCleanForSuggestion(env) {
-  return Boolean(env?.foreground) && isSessionDraftClean(env)
+  return isComposerInteractive(env) && isSessionDraftClean(env)
 }
 
 /**
@@ -421,8 +479,8 @@ function createClientSuggestionMachine(deps) {
 
       // Backfill if this session completed a turn in the background (either `sawRunning` was armed before
       // switching away / via sidebar session list, or Host observed a live `turn/end` while another session was open).
-      // Keep `sawRunning` intact if this initial mount frame is not yet foreground-ready.
-      if (nextEnv.foreground && !nextEnv.popupOpen) {
+      // Keep `sawRunning` intact if this initial mount frame is not yet interactive.
+      if (isComposerInteractive(nextEnv) && !nextEnv.popupOpen) {
         const wasSawRunning = slot.sawRunning
         slot.sawRunning = false
         startSuggestionFetch(sessionId, slot, nextEnv, {
@@ -455,8 +513,11 @@ function createClientSuggestionMachine(deps) {
       return
     }
 
+    const wasInteractive = prevSlotEnv ? isComposerInteractive(prevSlotEnv) : false
+    const nowInteractive = isComposerInteractive(nextEnv)
+
     // 4. Same session remained idle: check if user edited draft (including type-then-delete via draftRev),
-    //    submitted, or hit an error; also backfill if returning from a non-chat panel (e.g. Settings closed).
+    //    inserted quote/reference chips, submitted, or hit an error; also re-render or backfill on interactivity transitions.
     if (!slot.epochInvalidated) {
       const draftMutated = slot.baselineDraftRev !== null && nextEnv.draftRev !== slot.baselineDraftRev
       if (draftMutated || !isSessionDraftClean(nextEnv)) {
@@ -464,15 +525,15 @@ function createClientSuggestionMachine(deps) {
         return
       }
       if ((prevEnv && Boolean(prevEnv.popupOpen) !== Boolean(nextEnv.popupOpen))
-        || (prevSlotEnv && Boolean(prevSlotEnv.foreground) !== Boolean(nextEnv.foreground))) {
+        || (prevSlotEnv && wasInteractive !== nowInteractive)) {
         notify()
       }
       return
     }
 
-    // If user returned from Settings/Plugins panel or initial hydration (`foreground: false -> true`)
-    // to an idle session whose turn finished while non-foreground, backfill once.
-    if (prevSlotEnv && !prevSlotEnv.foreground && nextEnv.foreground
+    // If user returned from Settings/Plugins panel, initial hydration, or cleared a temporary composer block/takeover
+    // (`isComposerInteractive: false -> true`) to an idle session whose turn finished while non-interactive, backfill once.
+    if (prevSlotEnv && !wasInteractive && nowInteractive
       && isSnapshotCleanForSuggestion(nextEnv) && !nextEnv.popupOpen
       && slot.activeSuggestion === null && slot.activeAbort === null) {
       const wasSawRunning = slot.sawRunning
@@ -496,7 +557,7 @@ function createClientSuggestionMachine(deps) {
   }
 
   /**
-   * Whether the gray ghost preview should currently render and accept Tab for the given environment.
+   * Whether the gray ghost preview should currently render and accept Tab/click for the given environment.
    * @param {Record<string, any> | null} [liveEnv]
    * @returns {boolean}
    */
@@ -533,6 +594,31 @@ function createClientSuggestionMachine(deps) {
   }
 
   /**
+   * Accept the currently visible suggestion into the composer draft without submitting.
+   * Shared by `Tab` keydown and direct `Tab` badge click/tap.
+   *
+   * @param {{
+   *   acceptDraft: (text: string) => void,
+   *   focusEditor?: () => void,
+   *   liveEnv?: Record<string, any> | null,
+   * }} context
+   * @returns {boolean} true if accepted
+   */
+  function acceptSuggestion(context) {
+    if (disposed || !context || typeof context.acceptDraft !== 'function') return false
+    const env = context.liveEnv ?? currentEnv
+    if (!isPreviewVisible(env)) return false
+    const slot = slots.get(env.sessionId)
+    if (!slot || slot.activeSuggestion === null) return false
+
+    const acceptedText = slot.activeSuggestion.text
+    invalidateSessionTurn(env.sessionId)
+    context.acceptDraft(acceptedText)
+    context.focusEditor?.()
+    return true
+  }
+
+  /**
    * Arbitrate a bubble-phase `keydown` event on the composer card.
    * Only consumes `Tab` (accept) or `Escape` (dismiss) when preview is visible,
    * the composer editor holds focus, and no prior handler/popup claimed the event.
@@ -541,6 +627,7 @@ function createClientSuggestionMachine(deps) {
    * @param {{
    *   isEditorFocused: boolean,
    *   acceptDraft: (text: string) => void,
+   *   focusEditor?: () => void,
    *   liveEnv?: Record<string, any> | null,
    * }} context
    * @returns {boolean} true if consumed
@@ -560,12 +647,9 @@ function createClientSuggestionMachine(deps) {
     if (!slot || slot.activeSuggestion === null) return false
 
     if (event.key === 'Tab') {
-      const acceptedText = slot.activeSuggestion.text
       event.preventDefault?.()
       event.stopPropagation?.()
-      invalidateSessionTurn(env.sessionId)
-      context.acceptDraft(acceptedText)
-      return true
+      return acceptSuggestion(context)
     }
 
     if (event.key === 'Escape') {
@@ -597,6 +681,7 @@ function createClientSuggestionMachine(deps) {
     notifyUserEditIntent,
     isPreviewVisible,
     getVisibleSuggestion,
+    acceptSuggestion,
     handleKeyDown,
     invalidateCurrentTurn,
     dispose,
@@ -632,6 +717,62 @@ function hasOtherOverlayElements(anchorEl) {
   return Boolean(
     card.querySelector?.('[data-trigger-menu], [role="listbox"], [role="menu"], [role="dialog"], [aria-modal="true"]'),
   )
+}
+
+function findEditorElement(card) {
+  if (!card || typeof card.querySelector !== 'function') return null
+  return (
+    card.querySelector('[data-composer-input]')
+    ?? card.querySelector('[data-input-scroll] [contenteditable]')
+    ?? null
+  )
+}
+
+function isEditorElementEditable(editorEl) {
+  if (!editorEl) return false
+  if (editorEl.getAttribute?.('aria-disabled') === 'true') return false
+  if (editorEl.hasAttribute?.('disabled')) return false
+  const ceAttr = editorEl.getAttribute?.('contenteditable')
+  if (ceAttr === 'false') return false
+  if (typeof editorEl.isContentEditable === 'boolean' && !editorEl.isContentEditable && ceAttr === undefined) {
+    return false
+  }
+  return true
+}
+
+function hasDomInlineDecorators(card) {
+  if (!card || typeof card.querySelector !== 'function') return false
+  return Boolean(
+    card.querySelector('[data-composer-quote], [data-composer-chip], [data-composer-command], [data-lexical-decorator]'),
+  )
+}
+
+function isComposerTakenOver(card) {
+  if (!card || typeof card.closest !== 'function') return false
+  const fallbackAnchor = card.closest('[data-chain-overlay-fallback="conversation.composer"]')
+  if (!fallbackAnchor) return false
+  if (fallbackAnchor.style?.display === 'none') return true
+  if (fallbackAnchor.hidden === true || fallbackAnchor.getAttribute?.('aria-hidden') === 'true') return true
+  return false
+}
+
+function readComposerDomGates(anchorEl) {
+  const card = anchorEl?.closest?.('[data-composer-card]') ?? null
+  const editorEl = findEditorElement(card)
+  return {
+    card,
+    editorEl,
+    domOverlayOpen: hasOtherOverlayElements(anchorEl),
+    composing: Boolean(editorEl?.hasAttribute?.('data-composer-composing')),
+    editorEditable: card ? isEditorElementEditable(editorEl) : false,
+    hasDomDecorators: hasDomInlineDecorators(card),
+    composerTakenOver: isComposerTakenOver(card),
+  }
+}
+
+function domGateSignature(anchorEl) {
+  const g = readComposerDomGates(anchorEl)
+  return `${Number(g.domOverlayOpen)}:${Number(g.composing)}:${Number(g.editorEditable)}:${Number(g.hasDomDecorators)}:${Number(g.composerTakenOver)}`
 }
 
 /**
@@ -717,6 +858,7 @@ function createClientPlugin(React, options = {}) {
           inputActions,
           useProjection,
           usePanelInfo,
+          useAccess,
           t,
         } = props
 
@@ -758,6 +900,8 @@ function createClientPlugin(React, options = {}) {
         )
         const activePanelId = panelIdFromHook !== undefined ? panelIdFromHook : panelIdFromStore
 
+        const promptAllowed = typeof useAccess === 'function' ? useAccess('session/prompt') !== false : true
+
         const running = (typeof useSession === 'function' ? useSession(s => s?.running) : false) ?? false
         const promptError = (typeof useSession === 'function' ? useSession(s => s?.promptError) : null) ?? null
         const pendingCount = (typeof useSession === 'function' ? useSession(s => s?.pendingSubmissions?.length ?? 0) : 0) ?? 0
@@ -779,35 +923,73 @@ function createClientPlugin(React, options = {}) {
         const draft = input?.draft ?? ''
         const draftRev = input?.draftRev ?? 0
         const hasAttachments = (input?.attachmentIds?.length ?? 0) > 0
+        const hasStructuredDecorators = (input?.occurrences?.length ?? 0) > 0 || (input?.quotes?.length ?? 0) > 0
         const phase = input?.phase ?? 'plain'
         const queueLen = input?.queue?.length ?? 0
 
-        const domOverlayOpen = hasOtherOverlayElements(anchorRef.current)
-        const cardEl = anchorRef.current?.closest?.('[data-composer-card]') ?? null
-        const editorEl = cardEl?.querySelector?.('[data-input-scroll] [contenteditable]') ?? null
-        const composing = Boolean(editorEl?.hasAttribute?.('data-composer-composing'))
+        const rawPlan = typeof useProjection === 'function' ? useProjection('plan') : undefined
+        const planActive = Boolean(
+          rawPlan && typeof rawPlan === 'object'
+            ? (rawPlan.pending ? !rawPlan.active : rawPlan.active)
+            : rawPlan === true,
+        )
 
-        const envSnapshot = {
-          sessionId: typeof sessionId === 'string' ? sessionId : '',
-          foreground: activePanelId === null && !removed && subagent === null && input !== undefined && inputActions !== undefined,
-          running,
-          hasError: promptError !== null || retryableFailure !== null,
-          submissionPending: pendingCount > 0 || queueLen > 0,
-          draft,
-          draftRev,
-          hasAttachments,
-          phase,
-          popupOpen: triggerOpen || commandPopupOpen || domOverlayOpen,
-          composing,
-          turnHint,
+        const buildEnvForAnchor = (anchorNode) => {
+          const domGates = readComposerDomGates(anchorNode)
+          return {
+            sessionId: typeof sessionId === 'string' ? sessionId : '',
+            foreground: activePanelId === null && !removed && subagent === null && input !== undefined && inputActions !== undefined,
+            promptAllowed,
+            editorEditable: domGates.editorEditable,
+            composerTakenOver: domGates.composerTakenOver,
+            planActive,
+            running,
+            hasError: promptError !== null || retryableFailure !== null,
+            submissionPending: pendingCount > 0 || queueLen > 0,
+            draft,
+            draftRev,
+            hasAttachments,
+            hasInlineDecorators: hasStructuredDecorators || domGates.hasDomDecorators,
+            phase,
+            popupOpen: triggerOpen || commandPopupOpen || domGates.domOverlayOpen,
+            composing: domGates.composing,
+            turnHint,
+          }
         }
 
+        const envSnapshot = buildEnvForAnchor(anchorRef.current)
         const envRef = React.useRef(envSnapshot)
         envRef.current = envSnapshot
 
-        // Synchronize environment snapshot after commit and bind DOM listeners on composer card & editor.
+        const buildEnvRef = React.useRef(buildEnvForAnchor)
+        buildEnvRef.current = buildEnvForAnchor
+
+        const applyAcceptedDraft = (acceptedText) => {
+          const actions = inputActionsRef.current
+          if (!actions || typeof actions.setDraft !== 'function') return
+          actions.setDraft(acceptedText)
+          actions.persistDraft?.()
+        }
+
+        const focusComposerEditor = () => {
+          const card = anchorRef.current?.closest?.('[data-composer-card]')
+          const editor = findEditorElement(card)
+          if (!editor || !isEditorElementEditable(editor)) return
+          const active = card?.ownerDocument?.activeElement ?? (typeof document !== 'undefined' ? document.activeElement : null)
+          if (active !== editor && typeof editor.focus === 'function') {
+            try {
+              editor.focus({ preventScroll: true })
+            } catch {
+              editor.focus()
+            }
+          }
+        }
+
+        // Synchronize committed DOM + React environment snapshot after commit.
         React.useEffect(() => {
-          machine.sync(envSnapshot)
+          const committedEnv = buildEnvRef.current(anchorRef.current)
+          envRef.current = committedEnv
+          machine.sync(committedEnv)
         })
 
         React.useLayoutEffect(() => {
@@ -829,33 +1011,65 @@ function createClientPlugin(React, options = {}) {
           return undefined
         }, [sessionId])
 
+        // Observe DOM-only composer gate transitions (`blocked` toggling `contenteditable` / `aria-disabled`,
+        // inline quote/chip decorator portals, or `conversation.composer` chain takeover `display: none`).
         React.useEffect(() => {
+          if (typeof MutationObserver !== 'function') return undefined
           const anchor = anchorRef.current
           const card = anchor?.closest?.('[data-composer-card]')
           if (!card) return undefined
 
-          const findEditor = () => card.querySelector?.('[data-input-scroll] [contenteditable]') ?? null
+          const fallbackAnchor = card.closest?.('[data-chain-overlay-fallback="conversation.composer"]') ?? null
+          let lastSig = domGateSignature(anchor)
+
+          const onDomMutated = () => {
+            const nextSig = domGateSignature(anchor)
+            if (nextSig !== lastSig) {
+              lastSig = nextSig
+              forceRender()
+            }
+          }
+
+          const observer = new MutationObserver(onDomMutated)
+          observer.observe(card, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ['contenteditable', 'aria-disabled', 'disabled', 'data-composer-composing', 'role', 'aria-modal'],
+          })
+          if (fallbackAnchor) {
+            observer.observe(fallbackAnchor, {
+              attributes: true,
+              attributeFilter: ['style', 'hidden', 'aria-hidden'],
+            })
+          }
+          return () => {
+            observer.disconnect()
+          }
+        }, [sessionId])
+
+        React.useEffect(() => {
+          const anchor = anchorRef.current
+          const card = anchor?.closest?.('[data-composer-card]')
+          if (!card) return undefined
 
           const onEditIntent = () => {
             machine.notifyUserEditIntent(envRef.current.sessionId)
           }
 
           const onKeyDown = (ev) => {
-            const editor = findEditor()
+            const liveEnv = buildEnvRef.current(anchorRef.current)
+            envRef.current = liveEnv
+            if (liveEnv.popupOpen) return
+            const editor = findEditorElement(card)
             const active = card.ownerDocument?.activeElement ?? (typeof document !== 'undefined' ? document.activeElement : null)
             const isEditorFocused = Boolean(
               editor && active && (active === editor || (typeof editor.contains === 'function' && editor.contains(active))),
             )
-            if (hasOtherOverlayElements(anchorRef.current)) return
             machine.handleKeyDown(ev, {
               isEditorFocused,
-              liveEnv: envRef.current,
-              acceptDraft: (acceptedText) => {
-                const actions = inputActionsRef.current
-                if (!actions || typeof actions.setDraft !== 'function') return
-                actions.setDraft(acceptedText)
-                actions.persistDraft?.()
-              },
+              liveEnv,
+              acceptDraft: applyAcceptedDraft,
             })
           }
 
@@ -874,18 +1088,38 @@ function createClientPlugin(React, options = {}) {
           }
         }, [sessionId])
 
+        const onAcceptBadgeMouseDown = (ev) => {
+          // Keep current editor focus intact on mouse press without suppressing synthetic click on touch.
+          ev?.preventDefault?.()
+          ev?.stopPropagation?.()
+        }
+
+        const onAcceptBadgeClick = (ev) => {
+          ev?.preventDefault?.()
+          ev?.stopPropagation?.()
+          const liveEnv = buildEnvRef.current(anchorRef.current)
+          envRef.current = liveEnv
+          if (liveEnv.popupOpen) return
+          machine.acceptSuggestion({
+            liveEnv,
+            acceptDraft: applyAcceptedDraft,
+            focusEditor: focusComposerEditor,
+          })
+        }
+
         const suggestionText = machine.getVisibleSuggestion(envSnapshot)
         const translate = typeof t === 'function' ? t : ((key, vars) => {
           const template = LOCALES.en[key] ?? key
           return vars?.text ? template.replace('{text}', vars.text) : template
         })
+        const acceptLabel = translate('accept.label')
 
         return h(
           'div',
           {
             ref: anchorRef,
             'data-nss-anchor': '',
-            style: { position: 'static', width: 0, height: 0, pointerEvents: 'none' },
+            style: { position: 'static', width: 0, height: 0 },
           },
           suggestionText === null
             ? null
@@ -898,7 +1132,20 @@ function createClientPlugin(React, options = {}) {
                   'aria-label': translate('preview.aria', { text: suggestionText }),
                 },
                 h('span', { className: 'dsh-nss-text' }, suggestionText),
-                h('kbd', { className: 'dsh-nss-kbd', 'aria-hidden': 'true' }, translate('tab.hint')),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsh-nss-kbd',
+                    'data-nss-accept': '',
+                    tabIndex: -1,
+                    'aria-label': acceptLabel,
+                    title: acceptLabel,
+                    onMouseDown: onAcceptBadgeMouseDown,
+                    onClick: onAcceptBadgeClick,
+                  },
+                  translate('tab.hint'),
+                ),
               ),
         )
       }

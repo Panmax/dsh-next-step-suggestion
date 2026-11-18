@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Next-step suggestion",
-    "description": "Shows one ghost follow-up prompt in an empty composer after an agent turn finishes normally in the active session. Press Tab while focused in the composer to accept it as an editable draft without sending, or press Esc to dismiss. Sends at most one bounded background model request per completed turn using recent conversation text only (no full history or raw tool output), writes nothing to the session log, and stops all requests and key handling when disabled in Plugins.",
+    "description": "Shows one ghost follow-up prompt in an empty, editable composer after an agent turn finishes normally in the active session. Press Tab while focused in the composer—or click/tap the Tab badge—to accept it as an editable draft without sending, or press Esc to dismiss. Automatically yields to Plan Mode, composer blocks, inline quotes/references, and popups. Sends at most one bounded background model request per completed turn using recent conversation text only (no full history or raw tool output), writes nothing to the session log, and stops all requests and key handling when disabled in Plugins.",
     "detail": "docs/DETAIL.md"
   }
 }

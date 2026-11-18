@@ -90,6 +90,12 @@ test('Bundle manifest, locales, icon, CSS tokens, and built client.js stay in sy
   // Client CSS must use theme tokens only (no hardcoded hex/rgb colors).
   assert.doesNotMatch(SUGGESTION_CSS, /#[0-9a-fA-F]{3,8}\b|rgba?\(/u)
   assert.match(SUGGESTION_CSS, /var\(--dsw-/)
+
+  // `.overlayAnchor` (`[data-composer-overlay]`) precedes `<DraftEditor>` (`.grow`, `position: relative`)
+  // in `InputBar.tsx` DOM order, so `.dsh-nss-ghost` must declare a positive `z-index` (< 100 menu z-index)
+  // for `.dsh-nss-kbd` (`pointer-events: auto`) to receive hover/click events above the transparent editor.
+  assert.match(SUGGESTION_CSS, /\.dsh-nss-ghost\s*\{[\s\S]*?\bz-index:\s*([1-9]\d?)\s*;/u)
+  assert.match(SUGGESTION_CSS, /\.dsh-nss-kbd\s*\{[\s\S]*?\bpointer-events:\s*auto\s*;/u)
 })
 
 test('Acceptance 1 & 2: Normal turn end shows ghost suggestion separated from draft; Tab accepts into editable draft without sending; Esc dismisses', async () => {
@@ -267,6 +273,21 @@ test('Acceptance 4: Async race guards — typing then deleting to empty, switchi
   machine2.sync(baseEnv({ running: false, draft: '', draftRev: 3, turnHint: 1 }))
   assert.equal(machine2.getVisibleSuggestion(), null)
   machine2.dispose()
+
+  // P1 #5: Plan Mode blocks ghost suggestions
+  const machine3_p1 = createClientSuggestionMachine({
+    fetchSuggestion: async () => ({ status: 'ready', turn: 1, suggestion: 'Plan模式测试' }),
+  })
+  machine3_p1.sync(baseEnv({ sessionId: 's-plan', running: false, planActive: false, turnHint: 1 }))
+  await flushMicrotasks()
+  assert.equal(machine3_p1.getVisibleSuggestion(), 'Plan模式测试')
+
+  machine3_p1.sync(baseEnv({ sessionId: 's-plan', running: false, planActive: true, turnHint: 1 }))
+  assert.equal(machine3_p1.getVisibleSuggestion(), null)
+
+  machine3_p1.sync(baseEnv({ sessionId: 's-plan', running: false, planActive: false, turnHint: 1 }))
+  assert.equal(machine3_p1.getVisibleSuggestion(), 'Plan模式测试')
+  machine3_p1.dispose()
 
   // Race 3: Multi-session switching — never leaks onto session-b, preserves unconsumed suggestion on return to session-a
   // (even if InputHub recreates SessionInputShell with draftRev=0), and backfills turns that finished in background!
@@ -665,8 +686,40 @@ function createMinimalReactHarness() {
 
 function createMockComposerCard() {
   const listeners = new Map()
+  const editorAttrs = new Map([['contenteditable', 'true']])
+  const focusCalls = []
+  let hasQuote = false
+  let hasChip = false
+  let hasPopup = false
+  let takeoverDisplay = 'contents'
+
+  const fallbackWrapper = {
+    style: {
+      get display() { return takeoverDisplay },
+      set display(v) { takeoverDisplay = v },
+    },
+    hidden: false,
+    getAttribute: () => null,
+  }
+
   const editorEl = {
-    hasAttribute: () => false,
+    focusCalls,
+    getAttribute(name) {
+      return editorAttrs.has(name) ? editorAttrs.get(name) : null
+    },
+    setAttribute(name, value) {
+      editorAttrs.set(name, String(value))
+    },
+    removeAttribute(name) {
+      editorAttrs.delete(name)
+    },
+    hasAttribute(name) {
+      return editorAttrs.has(name)
+    },
+    focus(opts) {
+      focusCalls.push(opts ?? null)
+      doc.activeElement = editorEl
+    },
     contains: target => target === editorEl,
   }
   const scrollEl = { offsetTop: 8 }
@@ -674,10 +727,17 @@ function createMockComposerCard() {
   const overlayHost = { children: [] }
   const cardEl = {
     ownerDocument: doc,
+    closest(sel) {
+      if (sel === '[data-chain-overlay-fallback="conversation.composer"]') return fallbackWrapper
+      if (sel === '[data-composer-card]') return cardEl
+      return null
+    },
     querySelector(sel) {
-      if (sel === '[data-input-scroll] [contenteditable]') return editorEl
+      if (sel === '[data-composer-input]' || sel === '[data-input-scroll] [contenteditable]') return editorEl
       if (sel === '[data-input-scroll]') return scrollEl
       if (sel === '[data-composer-overlay]') return overlayHost
+      if (sel.includes('[data-composer-quote]') && (hasQuote || hasChip)) return { tagName: 'SPAN' }
+      if (sel.includes('[data-trigger-menu]') && hasPopup) return { tagName: 'DIV' }
       return null
     },
     addEventListener(type, fn) {
@@ -702,10 +762,352 @@ function createMockComposerCard() {
     anchorEl,
     cardEl,
     editorEl,
+    fallbackWrapper,
     overlayHost,
     doc,
+    setQuotePresent(v) { hasQuote = Boolean(v) },
+    setChipPresent(v) { hasChip = Boolean(v) },
+    setPopupPresent(v) { hasPopup = Boolean(v) },
+    setTakeoverActive(v) { takeoverDisplay = v ? 'none' : 'contents' },
     dispatchKeyDown(ev) {
       for (const fn of listeners.get('keydown') ?? []) fn(ev)
     },
   }
 }
+
+test('P0 #1 (Machine): blocked editor, denied prompt access, composer takeover, and inline decorators gate suggestions accurately', async () => {
+  let fetchCount = 0
+  const machine = createClientSuggestionMachine({
+    fetchSuggestion: async (_sid, turn) => {
+      fetchCount += 1
+      return { status: 'ready', turn: turn ?? 1, suggestion: '运行单元测试并检查覆盖率' }
+    },
+  })
+
+  // 1. Read-only viewer (`promptAllowed: false`) -> never fetches on turn completion.
+  machine.sync(baseEnv({ sessionId: 's-readonly', running: true, promptAllowed: false, turnHint: 1 }))
+  machine.sync(baseEnv({ sessionId: 's-readonly', running: false, promptAllowed: false, turnHint: 1 }))
+  await flushMicrotasks()
+  assert.equal(fetchCount, 0)
+  assert.equal(machine.getVisibleSuggestion(), null)
+
+  // 2. Normal session fetches & shows suggestion; temporary model block (`editorEditable: false`) hides it without burning turn,
+  //    then restoring model (`editorEditable: true`) restores the cached suggestion with zero extra fetches.
+  machine.sync(baseEnv({ sessionId: 's-block', running: true, turnHint: 1 }))
+  machine.sync(baseEnv({ sessionId: 's-block', running: false, turnHint: 1 }))
+  await flushMicrotasks()
+  assert.equal(fetchCount, 1)
+  assert.equal(machine.getVisibleSuggestion(), '运行单元测试并检查覆盖率')
+
+  // Model becomes blocked -> preview hides and refuses Tab / click acceptance.
+  machine.sync(baseEnv({ sessionId: 's-block', running: false, editorEditable: false, turnHint: 1 }))
+  assert.equal(machine.getVisibleSuggestion(), null)
+  assert.equal(machine.acceptSuggestion({ acceptDraft: () => { throw new Error('must not accept') } }), false)
+
+  // User picks valid model -> cached suggestion reappears without calling fetchSuggestion again!
+  machine.sync(baseEnv({ sessionId: 's-block', running: false, editorEditable: true, turnHint: 1 }))
+  assert.equal(fetchCount, 1)
+  assert.equal(machine.getVisibleSuggestion(), '运行单元测试并检查覆盖率')
+
+  // 3. `conversation.composer` takeover (`composerTakenOver: true`) hides preview temporarily, then restores when cleared.
+  machine.sync(baseEnv({ sessionId: 's-block', running: false, composerTakenOver: true, turnHint: 1 }))
+  assert.equal(machine.getVisibleSuggestion(), null)
+  machine.sync(baseEnv({ sessionId: 's-block', running: false, composerTakenOver: false, turnHint: 1 }))
+  assert.equal(machine.getVisibleSuggestion(), '运行单元测试并检查覆盖率')
+
+  // 4. Inserting an inline quote/reference decorator (`hasInlineDecorators: true`) permanently invalidates this turn's suggestion
+  //    even if `draft` stays `''` and the quote is subsequently removed!
+  machine.sync(baseEnv({ sessionId: 's-block', running: false, draft: '', hasInlineDecorators: true, turnHint: 1 }))
+  assert.equal(machine.getVisibleSuggestion(), null)
+  machine.sync(baseEnv({ sessionId: 's-block', running: false, draft: '', hasInlineDecorators: false, turnHint: 1 }))
+  assert.equal(machine.getVisibleSuggestion(), null)
+
+  machine.dispose()
+})
+
+test('P0 #1 (DOM + MutationObserver): NextStepOverlay yields to disabled/blocked composer, takeover wrapper, prompt denial, and quote nodes', async () => {
+  let fetchCalls = 0
+  let registeredOverlayComponent = null
+  const mockReact = createMinimalReactHarness()
+
+  // Stub global MutationObserver to verify DOM-only attribute mutations trigger re-sync without infinite loops.
+  const prevMutationObserver = globalThis.MutationObserver
+  const activeObservers = []
+  globalThis.MutationObserver = class MockMutationObserver {
+    constructor(cb) {
+      this.cb = cb
+      this.targets = []
+      activeObservers.push(this)
+    }
+    observe(target, opts) { this.targets.push({ target, opts }) }
+    disconnect() {
+      const idx = activeObservers.indexOf(this)
+      if (idx >= 0) activeObservers.splice(idx, 1)
+    }
+  }
+
+  try {
+    const clientPlugin = createClientPlugin(mockReact.React, {
+      fetchImpl: async () => {
+        fetchCalls += 1
+        return {
+          ok: true,
+          json: async () => ({ status: 'ready', turn: 1, suggestion: '验证禁用态与引用块门控' }),
+        }
+      },
+    })
+
+    const cleanups = []
+    clientPlugin.apply({
+      effect(fn) {
+        const c = fn()
+        if (typeof c === 'function') cleanups.push(c)
+        return c
+      },
+      locale: { register: () => () => {} },
+      slots: {
+        inject(_k, cb) { return cb() },
+        register(_m, Comp) {
+          registeredOverlayComponent = Comp
+          return () => { registeredOverlayComponent = null }
+        },
+      },
+    })
+
+    const cardDom = createMockComposerCard()
+    let agentRunning = true
+    let promptGranted = false
+    let planState = { active: false, pending: false }
+    let occurrences = []
+
+    const renderOverlay = () => mockReact.render(registeredOverlayComponent, {
+      sessionId: 'dom-gate-session',
+      useAccess: action => (action === 'session/prompt' ? promptGranted : true),
+      useSession: sel => sel({ running: agentRunning, promptError: null, pendingSubmissions: [], subagent: null, removed: false }),
+      useInput: sel => sel({ draft: '', draftRev: 0, attachmentIds: [], occurrences, phase: 'plain', queue: [] }),
+      inputActions: { setDraft() {}, persistDraft() {} },
+      useProjection: (key) => {
+        if (key === 'turnOutline') return [{ turn: 1 }]
+        if (key === 'plan') return planState
+        return null
+      },
+      usePanelInfo: sel => sel({ activePanelId: null }),
+    }, cardDom.anchorEl)
+
+    // A. `useAccess('session/prompt') === false`: turn finishes -> zero fetches, null overlay.
+    renderOverlay()
+    agentRunning = false
+    let vnode = renderOverlay()
+    await flushMicrotasks()
+    assert.equal(fetchCalls, 0)
+    assert.equal(vnode.children[0], null)
+
+    // B. Grant `session/prompt` access -> backfills once and renders ghost suggestion!
+    promptGranted = true
+    renderOverlay()
+    await flushMicrotasks()
+    vnode = renderOverlay()
+    assert.equal(fetchCalls, 1)
+    assert.ok(vnode.children[0] !== null)
+
+    // Verify MutationObserver observed both cardEl and `[data-chain-overlay-fallback="conversation.composer"]`.
+    assert.equal(activeObservers.length, 1)
+    assert.equal(activeObservers[0].targets.length, 2)
+
+    // C. Host sets `aria-disabled="true"` / `contenteditable="false"` on composer (`blocked` state) -> hides overlay so native block reason shows!
+    cardDom.editorEl.setAttribute('aria-disabled', 'true')
+    cardDom.editorEl.setAttribute('contenteditable', 'false')
+    activeObservers[0].cb()
+    vnode = renderOverlay()
+    assert.equal(vnode.children[0], null)
+
+    // Clearing `blocked` state restores suggestion without re-fetching.
+    cardDom.editorEl.removeAttribute('aria-disabled')
+    cardDom.editorEl.setAttribute('contenteditable', 'true')
+    activeObservers[0].cb()
+    vnode = renderOverlay()
+    assert.equal(fetchCalls, 1)
+    assert.ok(vnode.children[0] !== null)
+
+    // D. `conversation.composer` takeover (`style.display = 'none'`) hides overlay, then restores when cleared.
+    cardDom.setTakeoverActive(true)
+    activeObservers[0].cb()
+    vnode = renderOverlay()
+    assert.equal(vnode.children[0], null)
+
+    cardDom.setTakeoverActive(false)
+    activeObservers[0].cb()
+    vnode = renderOverlay()
+    assert.ok(vnode.children[0] !== null)
+
+    // D2. Plan Mode projection (`active` or `pending` toggle) hides overlay, then restores when exited.
+    planState = { active: true, pending: false }
+    vnode = renderOverlay()
+    assert.equal(vnode.children[0], null)
+
+    planState = { active: false, pending: false }
+    vnode = renderOverlay()
+    assert.ok(vnode.children[0] !== null)
+
+    // E. Inserting an atomic reply quote (`[data-composer-quote]`) invalidates the turn permanently.
+    cardDom.setQuotePresent(true)
+    activeObservers[0].cb()
+    vnode = renderOverlay()
+    assert.equal(vnode.children[0], null)
+
+    cardDom.setQuotePresent(false)
+    activeObservers[0].cb()
+    vnode = renderOverlay()
+    assert.equal(vnode.children[0], null)
+
+    // Also verify structured `input.occurrences` invalidates on a subsequent turn.
+    agentRunning = true
+    renderOverlay()
+    agentRunning = false
+    occurrences = [{ id: 'occ-1', start: 0, end: 5 }]
+    renderOverlay()
+    await flushMicrotasks()
+    assert.equal(fetchCalls, 1)
+
+    mockReact.unmount()
+    assert.equal(activeObservers.length, 0)
+    for (const c of cleanups) c()
+  } finally {
+    globalThis.MutationObserver = prevMutationObserver
+  }
+})
+
+test('P0 #4 (Clickable/tappable Tab badge): clicking Tab pill accepts into draft, focuses unfocused editor, preserves tabIndex=-1, and ignores clicks when popup/disabled', async () => {
+  let registeredOverlayComponent = null
+  const mockReact = createMinimalReactHarness()
+  let currentTurn = 1
+
+  const clientPlugin = createClientPlugin(mockReact.React, {
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({
+        status: 'ready',
+        turn: currentTurn,
+        suggestion: currentTurn === 1 ? '在触屏上点击 Tab 采纳草稿' : '第二次点击测试草稿',
+      }),
+    }),
+  })
+
+  const cleanups = []
+  clientPlugin.apply({
+    effect(fn) {
+      const c = fn()
+      if (typeof c === 'function') cleanups.push(c)
+      return c
+    },
+    locale: { register: () => () => {} },
+    slots: {
+      inject(_k, cb) { return cb() },
+      register(_m, Comp) {
+        registeredOverlayComponent = Comp
+        return () => { registeredOverlayComponent = null }
+      },
+    },
+  })
+
+  const cardDom = createMockComposerCard()
+  let agentRunning = true
+  let draftText = ''
+  let draftRev = 0
+  let persistedCount = 0
+  let submittedCount = 0
+
+  const inputActions = {
+    setDraft(next) {
+      draftText = next
+      draftRev += 1
+    },
+    persistDraft() {
+      persistedCount += 1
+    },
+    submit() {
+      submittedCount += 1
+    },
+  }
+
+  const renderOverlay = () => mockReact.render(registeredOverlayComponent, {
+    sessionId: 'tap-accept-session',
+    useSession: sel => sel({ running: agentRunning, promptError: null, pendingSubmissions: [], subagent: null, removed: false }),
+    useInput: sel => sel({ draft: draftText, draftRev, attachmentIds: [], phase: 'plain', queue: [] }),
+    inputActions,
+    useProjection: key => (key === 'turnOutline' ? [{ turn: currentTurn }] : null),
+    usePanelInfo: sel => sel({ activePanelId: null }),
+  }, cardDom.anchorEl)
+
+  renderOverlay()
+  agentRunning = false
+  renderOverlay()
+  await flushMicrotasks()
+  let vnode = renderOverlay()
+
+  const ghostNode = vnode.children[0]
+  assert.ok(ghostNode)
+  const badgeBtn = ghostNode.children[1]
+  assert.equal(badgeBtn.type, 'button')
+  assert.equal(badgeBtn.props.type, 'button')
+  assert.equal(badgeBtn.props.tabIndex, -1)
+  assert.equal(badgeBtn.props['data-nss-accept'], '')
+  assert.equal(badgeBtn.children[0], 'Tab')
+
+  // Simulate unfocused editor (e.g. mobile touch or clicking directly while reading transcript).
+  cardDom.doc.activeElement = null
+  assert.equal(cardDom.editorEl.focusCalls.length, 0)
+
+  // If a trigger popup opens right before click, click is safely ignored.
+  cardDom.setPopupPresent(true)
+  badgeBtn.props.onClick({ preventDefault() {}, stopPropagation() {} })
+  assert.equal(draftText, '')
+  cardDom.setPopupPresent(false)
+
+  // Mouse down preserves focus without side effects; click accepts draft, persists, focuses editor, and does NOT submit!
+  let mouseDownPrevented = false
+  badgeBtn.props.onMouseDown({
+    preventDefault() { mouseDownPrevented = true },
+    stopPropagation() {},
+  })
+  assert.equal(mouseDownPrevented, true)
+
+  let clickPrevented = false
+  badgeBtn.props.onClick({
+    preventDefault() { clickPrevented = true },
+    stopPropagation() {},
+  })
+  assert.equal(clickPrevented, true)
+  assert.equal(draftText, '在触屏上点击 Tab 采纳草稿')
+  assert.equal(persistedCount, 1)
+  assert.equal(submittedCount, 0)
+  assert.equal(cardDom.editorEl.focusCalls.length, 1)
+  assert.deepEqual(cardDom.editorEl.focusCalls[0], { preventScroll: true })
+  assert.equal(cardDom.doc.activeElement, cardDom.editorEl)
+
+  // Subsequent render hides the ghost preview and will not re-show if draft is cleared back to empty.
+  vnode = renderOverlay()
+  assert.equal(vnode.children[0], null)
+  draftText = ''
+  draftRev += 1
+  vnode = renderOverlay()
+  assert.equal(vnode.children[0], null)
+
+  // Turn 2: when editor is ALREADY focused, clicking badge accepts without redundant `.focus()` call (preserving Lexical selection).
+  currentTurn = 2
+  agentRunning = true
+  renderOverlay()
+  agentRunning = false
+  renderOverlay()
+  await flushMicrotasks()
+  vnode = renderOverlay()
+  const badgeBtn2 = vnode.children[0].children[1]
+  cardDom.doc.activeElement = cardDom.editorEl
+  const focusCountBefore = cardDom.editorEl.focusCalls.length
+  badgeBtn2.props.onClick({ preventDefault() {}, stopPropagation() {} })
+  assert.equal(draftText, '第二次点击测试草稿')
+  assert.equal(cardDom.editorEl.focusCalls.length, focusCountBefore)
+
+  mockReact.unmount()
+  for (const c of cleanups) c()
+})

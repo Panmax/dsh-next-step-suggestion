@@ -38,6 +38,62 @@ function hasOtherOverlayElements(anchorEl) {
   )
 }
 
+function findEditorElement(card) {
+  if (!card || typeof card.querySelector !== 'function') return null
+  return (
+    card.querySelector('[data-composer-input]')
+    ?? card.querySelector('[data-input-scroll] [contenteditable]')
+    ?? null
+  )
+}
+
+function isEditorElementEditable(editorEl) {
+  if (!editorEl) return false
+  if (editorEl.getAttribute?.('aria-disabled') === 'true') return false
+  if (editorEl.hasAttribute?.('disabled')) return false
+  const ceAttr = editorEl.getAttribute?.('contenteditable')
+  if (ceAttr === 'false') return false
+  if (typeof editorEl.isContentEditable === 'boolean' && !editorEl.isContentEditable && ceAttr === undefined) {
+    return false
+  }
+  return true
+}
+
+function hasDomInlineDecorators(card) {
+  if (!card || typeof card.querySelector !== 'function') return false
+  return Boolean(
+    card.querySelector('[data-composer-quote], [data-composer-chip], [data-composer-command], [data-lexical-decorator]'),
+  )
+}
+
+function isComposerTakenOver(card) {
+  if (!card || typeof card.closest !== 'function') return false
+  const fallbackAnchor = card.closest('[data-chain-overlay-fallback="conversation.composer"]')
+  if (!fallbackAnchor) return false
+  if (fallbackAnchor.style?.display === 'none') return true
+  if (fallbackAnchor.hidden === true || fallbackAnchor.getAttribute?.('aria-hidden') === 'true') return true
+  return false
+}
+
+function readComposerDomGates(anchorEl) {
+  const card = anchorEl?.closest?.('[data-composer-card]') ?? null
+  const editorEl = findEditorElement(card)
+  return {
+    card,
+    editorEl,
+    domOverlayOpen: hasOtherOverlayElements(anchorEl),
+    composing: Boolean(editorEl?.hasAttribute?.('data-composer-composing')),
+    editorEditable: card ? isEditorElementEditable(editorEl) : false,
+    hasDomDecorators: hasDomInlineDecorators(card),
+    composerTakenOver: isComposerTakenOver(card),
+  }
+}
+
+function domGateSignature(anchorEl) {
+  const g = readComposerDomGates(anchorEl)
+  return `${Number(g.domOverlayOpen)}:${Number(g.composing)}:${Number(g.editorEditable)}:${Number(g.hasDomDecorators)}:${Number(g.composerTakenOver)}`
+}
+
 /**
  * Build the Cordis client plugin definition given `React` from the browser module table.
  * @param {any} React
@@ -121,6 +177,7 @@ export function createClientPlugin(React, options = {}) {
           inputActions,
           useProjection,
           usePanelInfo,
+          useAccess,
           t,
         } = props
 
@@ -162,6 +219,8 @@ export function createClientPlugin(React, options = {}) {
         )
         const activePanelId = panelIdFromHook !== undefined ? panelIdFromHook : panelIdFromStore
 
+        const promptAllowed = typeof useAccess === 'function' ? useAccess('session/prompt') !== false : true
+
         const running = (typeof useSession === 'function' ? useSession(s => s?.running) : false) ?? false
         const promptError = (typeof useSession === 'function' ? useSession(s => s?.promptError) : null) ?? null
         const pendingCount = (typeof useSession === 'function' ? useSession(s => s?.pendingSubmissions?.length ?? 0) : 0) ?? 0
@@ -183,35 +242,73 @@ export function createClientPlugin(React, options = {}) {
         const draft = input?.draft ?? ''
         const draftRev = input?.draftRev ?? 0
         const hasAttachments = (input?.attachmentIds?.length ?? 0) > 0
+        const hasStructuredDecorators = (input?.occurrences?.length ?? 0) > 0 || (input?.quotes?.length ?? 0) > 0
         const phase = input?.phase ?? 'plain'
         const queueLen = input?.queue?.length ?? 0
 
-        const domOverlayOpen = hasOtherOverlayElements(anchorRef.current)
-        const cardEl = anchorRef.current?.closest?.('[data-composer-card]') ?? null
-        const editorEl = cardEl?.querySelector?.('[data-input-scroll] [contenteditable]') ?? null
-        const composing = Boolean(editorEl?.hasAttribute?.('data-composer-composing'))
+        const rawPlan = typeof useProjection === 'function' ? useProjection('plan') : undefined
+        const planActive = Boolean(
+          rawPlan && typeof rawPlan === 'object'
+            ? (rawPlan.pending ? !rawPlan.active : rawPlan.active)
+            : rawPlan === true,
+        )
 
-        const envSnapshot = {
-          sessionId: typeof sessionId === 'string' ? sessionId : '',
-          foreground: activePanelId === null && !removed && subagent === null && input !== undefined && inputActions !== undefined,
-          running,
-          hasError: promptError !== null || retryableFailure !== null,
-          submissionPending: pendingCount > 0 || queueLen > 0,
-          draft,
-          draftRev,
-          hasAttachments,
-          phase,
-          popupOpen: triggerOpen || commandPopupOpen || domOverlayOpen,
-          composing,
-          turnHint,
+        const buildEnvForAnchor = (anchorNode) => {
+          const domGates = readComposerDomGates(anchorNode)
+          return {
+            sessionId: typeof sessionId === 'string' ? sessionId : '',
+            foreground: activePanelId === null && !removed && subagent === null && input !== undefined && inputActions !== undefined,
+            promptAllowed,
+            editorEditable: domGates.editorEditable,
+            composerTakenOver: domGates.composerTakenOver,
+            planActive,
+            running,
+            hasError: promptError !== null || retryableFailure !== null,
+            submissionPending: pendingCount > 0 || queueLen > 0,
+            draft,
+            draftRev,
+            hasAttachments,
+            hasInlineDecorators: hasStructuredDecorators || domGates.hasDomDecorators,
+            phase,
+            popupOpen: triggerOpen || commandPopupOpen || domGates.domOverlayOpen,
+            composing: domGates.composing,
+            turnHint,
+          }
         }
 
+        const envSnapshot = buildEnvForAnchor(anchorRef.current)
         const envRef = React.useRef(envSnapshot)
         envRef.current = envSnapshot
 
-        // Synchronize environment snapshot after commit and bind DOM listeners on composer card & editor.
+        const buildEnvRef = React.useRef(buildEnvForAnchor)
+        buildEnvRef.current = buildEnvForAnchor
+
+        const applyAcceptedDraft = (acceptedText) => {
+          const actions = inputActionsRef.current
+          if (!actions || typeof actions.setDraft !== 'function') return
+          actions.setDraft(acceptedText)
+          actions.persistDraft?.()
+        }
+
+        const focusComposerEditor = () => {
+          const card = anchorRef.current?.closest?.('[data-composer-card]')
+          const editor = findEditorElement(card)
+          if (!editor || !isEditorElementEditable(editor)) return
+          const active = card?.ownerDocument?.activeElement ?? (typeof document !== 'undefined' ? document.activeElement : null)
+          if (active !== editor && typeof editor.focus === 'function') {
+            try {
+              editor.focus({ preventScroll: true })
+            } catch {
+              editor.focus()
+            }
+          }
+        }
+
+        // Synchronize committed DOM + React environment snapshot after commit.
         React.useEffect(() => {
-          machine.sync(envSnapshot)
+          const committedEnv = buildEnvRef.current(anchorRef.current)
+          envRef.current = committedEnv
+          machine.sync(committedEnv)
         })
 
         React.useLayoutEffect(() => {
@@ -233,33 +330,65 @@ export function createClientPlugin(React, options = {}) {
           return undefined
         }, [sessionId])
 
+        // Observe DOM-only composer gate transitions (`blocked` toggling `contenteditable` / `aria-disabled`,
+        // inline quote/chip decorator portals, or `conversation.composer` chain takeover `display: none`).
         React.useEffect(() => {
+          if (typeof MutationObserver !== 'function') return undefined
           const anchor = anchorRef.current
           const card = anchor?.closest?.('[data-composer-card]')
           if (!card) return undefined
 
-          const findEditor = () => card.querySelector?.('[data-input-scroll] [contenteditable]') ?? null
+          const fallbackAnchor = card.closest?.('[data-chain-overlay-fallback="conversation.composer"]') ?? null
+          let lastSig = domGateSignature(anchor)
+
+          const onDomMutated = () => {
+            const nextSig = domGateSignature(anchor)
+            if (nextSig !== lastSig) {
+              lastSig = nextSig
+              forceRender()
+            }
+          }
+
+          const observer = new MutationObserver(onDomMutated)
+          observer.observe(card, {
+            subtree: true,
+            childList: true,
+            attributes: true,
+            attributeFilter: ['contenteditable', 'aria-disabled', 'disabled', 'data-composer-composing', 'role', 'aria-modal'],
+          })
+          if (fallbackAnchor) {
+            observer.observe(fallbackAnchor, {
+              attributes: true,
+              attributeFilter: ['style', 'hidden', 'aria-hidden'],
+            })
+          }
+          return () => {
+            observer.disconnect()
+          }
+        }, [sessionId])
+
+        React.useEffect(() => {
+          const anchor = anchorRef.current
+          const card = anchor?.closest?.('[data-composer-card]')
+          if (!card) return undefined
 
           const onEditIntent = () => {
             machine.notifyUserEditIntent(envRef.current.sessionId)
           }
 
           const onKeyDown = (ev) => {
-            const editor = findEditor()
+            const liveEnv = buildEnvRef.current(anchorRef.current)
+            envRef.current = liveEnv
+            if (liveEnv.popupOpen) return
+            const editor = findEditorElement(card)
             const active = card.ownerDocument?.activeElement ?? (typeof document !== 'undefined' ? document.activeElement : null)
             const isEditorFocused = Boolean(
               editor && active && (active === editor || (typeof editor.contains === 'function' && editor.contains(active))),
             )
-            if (hasOtherOverlayElements(anchorRef.current)) return
             machine.handleKeyDown(ev, {
               isEditorFocused,
-              liveEnv: envRef.current,
-              acceptDraft: (acceptedText) => {
-                const actions = inputActionsRef.current
-                if (!actions || typeof actions.setDraft !== 'function') return
-                actions.setDraft(acceptedText)
-                actions.persistDraft?.()
-              },
+              liveEnv,
+              acceptDraft: applyAcceptedDraft,
             })
           }
 
@@ -278,18 +407,38 @@ export function createClientPlugin(React, options = {}) {
           }
         }, [sessionId])
 
+        const onAcceptBadgeMouseDown = (ev) => {
+          // Keep current editor focus intact on mouse press without suppressing synthetic click on touch.
+          ev?.preventDefault?.()
+          ev?.stopPropagation?.()
+        }
+
+        const onAcceptBadgeClick = (ev) => {
+          ev?.preventDefault?.()
+          ev?.stopPropagation?.()
+          const liveEnv = buildEnvRef.current(anchorRef.current)
+          envRef.current = liveEnv
+          if (liveEnv.popupOpen) return
+          machine.acceptSuggestion({
+            liveEnv,
+            acceptDraft: applyAcceptedDraft,
+            focusEditor: focusComposerEditor,
+          })
+        }
+
         const suggestionText = machine.getVisibleSuggestion(envSnapshot)
         const translate = typeof t === 'function' ? t : ((key, vars) => {
           const template = LOCALES.en[key] ?? key
           return vars?.text ? template.replace('{text}', vars.text) : template
         })
+        const acceptLabel = translate('accept.label')
 
         return h(
           'div',
           {
             ref: anchorRef,
             'data-nss-anchor': '',
-            style: { position: 'static', width: 0, height: 0, pointerEvents: 'none' },
+            style: { position: 'static', width: 0, height: 0 },
           },
           suggestionText === null
             ? null
@@ -302,7 +451,20 @@ export function createClientPlugin(React, options = {}) {
                   'aria-label': translate('preview.aria', { text: suggestionText }),
                 },
                 h('span', { className: 'dsh-nss-text' }, suggestionText),
-                h('kbd', { className: 'dsh-nss-kbd', 'aria-hidden': 'true' }, translate('tab.hint')),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsh-nss-kbd',
+                    'data-nss-accept': '',
+                    tabIndex: -1,
+                    'aria-label': acceptLabel,
+                    title: acceptLabel,
+                    onMouseDown: onAcceptBadgeMouseDown,
+                    onClick: onAcceptBadgeClick,
+                  },
+                  translate('tab.hint'),
+                ),
               ),
         )
       }
