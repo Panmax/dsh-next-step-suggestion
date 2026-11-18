@@ -1,6 +1,6 @@
 {
   "name": "dsh-next-step-suggestion",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Show a ghost next-step prompt suggestion in an empty composer after an agent turn finishes; press Tab to accept into an editable draft.",
   "author": "Panmax",
   "license": "MIT",
