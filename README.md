@@ -63,7 +63,7 @@ Optional fields under the `next-step-suggestion` entry in `cordis.patch.yml`:
         timeoutMs: 30000
         # Optional explicit route override (defaults to the active session's model):
         # provider: deepseek
-        # model: deepseek-chat
+        # model: deepseek-flash
 ```
 
 | Field | Default | Description |

@@ -63,7 +63,7 @@ dsh plugin --profile web remove dsh-next-step-suggestion
         timeoutMs: 30000
         # 可选：显式指定用于生成建议的模型路由（默认跟随当前会话模型）
         # provider: deepseek
-        # model: deepseek-chat
+        # model: deepseek-flash
 ```
 
 | 字段 | 默认值 | 说明 |
