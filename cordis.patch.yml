@@ -1,0 +1,8 @@
+- insert:
+    - id: next-step-suggestion
+      name: 'dsh-next-step-suggestion'
+      config:
+        maxInputBytes: 6000
+        # Ceiling includes non-disableable reasoning tokens on thinking models (mirrors dsh-session-title-llm).
+        maxOutputTokens: 4096
+        timeoutMs: 30000
