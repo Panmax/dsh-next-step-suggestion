@@ -70,24 +70,25 @@ test('Bundle manifest, locales, icon, CSS tokens, and built client.js stay in sy
 
   const detailEn = readFileSync(resolve(rootDir, 'docs/DETAIL.md'), 'utf8').trim()
   const detailZh = readFileSync(resolve(rootDir, 'docs/DETAIL.zh.md'), 'utf8').trim()
-  assert.match(detailEn, /^!\[[^\]]+\]\(preview\.svg\)$/)
-  assert.match(detailZh, /^!\[[^\]]+\]\(preview\.zh\.svg\)$/)
+  assert.match(detailEn, /^!\[[^\]]+\]\(preview\.png\)$/)
+  assert.match(detailZh, /^!\[[^\]]+\]\(preview\.zh\.png\)$/)
 
   const icon = readFileSync(resolve(rootDir, 'icon.svg'), 'utf8')
   assert.match(icon, /viewBox="0 0 36 36"/)
   assert.doesNotMatch(icon, /<(?:script|style|text|image|foreignObject)\b/i)
 
-  for (const svgRelPath of [
-    'docs/preview.svg',
-    'docs/preview.zh.svg',
-    'docs/step-1-ghost.svg',
-    'docs/step-2-accepted.svg',
-    'docs/step-1-ghost.zh.svg',
-    'docs/step-2-accepted.zh.svg',
+  const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  for (const pngRelPath of [
+    'docs/preview.png',
+    'docs/preview.zh.png',
+    'docs/step-1-ghost.png',
+    'docs/step-2-accepted.png',
+    'docs/step-1-ghost.zh.png',
+    'docs/step-2-accepted.zh.png',
   ]) {
-    const svg = readFileSync(resolve(rootDir, svgRelPath), 'utf8')
-    assert.match(svg, /^<svg\b/)
-    assert.doesNotMatch(svg, /<(?:script|style|text|image|foreignObject)\b/i)
+    const buf = readFileSync(resolve(rootDir, pngRelPath))
+    assert.ok(buf.byteLength > 1024 && buf.byteLength < 1024 * 1024)
+    assert.deepEqual(buf.subarray(0, 8), PNG_SIGNATURE)
   }
 
   // Client CSS must use theme tokens only (no hardcoded hex/rgb colors).

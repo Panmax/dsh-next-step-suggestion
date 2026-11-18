@@ -5,7 +5,7 @@ English | [中文](README.zh.md)
 **Codex-style ghost next-step prompt suggestions for DeepSeek Harness Web.**<br />
 When an agent finishes a turn in the active conversation, an empty composer previews one concise, directly sendable follow-up instruction. Press **`Tab`** to accept it as an editable draft, then submit whenever you are ready.
 
-![Next-step suggestion preview: ghost prompt before Tab and editable draft after Tab](docs/preview.svg)
+![Next-step suggestion preview: ghost prompt before Tab and editable draft after Tab](docs/preview.png)
 
 ## Features
 
@@ -19,11 +19,11 @@ When an agent finishes a turn in the active conversation, an empty composer prev
 <table>
   <tr>
     <td align="center">
-      <img src="docs/step-1-ghost.svg" width="420" alt="Step 1: Ghost suggestion in empty composer"><br>
+      <img src="docs/step-1-ghost.png" width="440" alt="Step 1: Ghost suggestion in empty composer"><br>
       <sub><b>1. Turn Completed</b> — Gray ghost prompt + <code>Tab</code> badge; draft stays empty and Send remains inactive</sub>
     </td>
     <td align="center">
-      <img src="docs/step-2-accepted.svg" width="420" alt="Step 2: Editable draft after pressing Tab"><br>
+      <img src="docs/step-2-accepted.png" width="440" alt="Step 2: Editable draft after pressing Tab"><br>
       <sub><b>2. Press <code>Tab</code></b> — Prompt becomes an editable draft with caret at the end; Send turns active without auto-sending</sub>
     </td>
   </tr>
