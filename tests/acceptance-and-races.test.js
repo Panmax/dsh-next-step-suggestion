@@ -71,13 +71,20 @@ test('Bundle manifest, locales, icon, CSS tokens, and built client.js stay in sy
   const detailEn = readFileSync(resolve(rootDir, 'docs/DETAIL.md'), 'utf8').trim()
   const detailZh = readFileSync(resolve(rootDir, 'docs/DETAIL.zh.md'), 'utf8').trim()
   assert.match(detailEn, /^!\[[^\]]+\]\(preview\.svg\)$/)
-  assert.match(detailZh, /^!\[[^\]]+\]\(preview\.svg\)$/)
+  assert.match(detailZh, /^!\[[^\]]+\]\(preview\.zh\.svg\)$/)
 
   const icon = readFileSync(resolve(rootDir, 'icon.svg'), 'utf8')
   assert.match(icon, /viewBox="0 0 36 36"/)
   assert.doesNotMatch(icon, /<(?:script|style|text|image|foreignObject)\b/i)
 
-  for (const svgRelPath of ['docs/preview.svg', 'docs/step-1-ghost.svg', 'docs/step-2-accepted.svg']) {
+  for (const svgRelPath of [
+    'docs/preview.svg',
+    'docs/preview.zh.svg',
+    'docs/step-1-ghost.svg',
+    'docs/step-2-accepted.svg',
+    'docs/step-1-ghost.zh.svg',
+    'docs/step-2-accepted.zh.svg',
+  ]) {
     const svg = readFileSync(resolve(rootDir, svgRelPath), 'utf8')
     assert.match(svg, /^<svg\b/)
     assert.doesNotMatch(svg, /<(?:script|style|text|image|foreignObject)\b/i)

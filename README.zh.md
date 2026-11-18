@@ -5,7 +5,7 @@
 **面向 DeepSeek Harness Web 的 Codex 风格「下一步建议」插件。**<br />
 当前台会话中的 Agent 正常完成一轮工作且输入框为空时，输入框内会以柔和灰色预览一条简短、可直接发出的后续指令。聚焦输入框按 **`Tab`** 即可将其采纳为可编辑草稿，再按发送键才会发出。
 
-![下一步建议效果对比：按 Tab 前的灰色预览与按 Tab 后的可编辑草稿](docs/preview.svg)
+![下一步建议效果对比：按 Tab 前的灰色预览与按 Tab 后的可编辑草稿](docs/preview.zh.svg)
 
 ## 核心特性
 
@@ -19,11 +19,11 @@
 <table>
   <tr>
     <td align="center">
-      <img src="docs/step-1-ghost.svg" width="420" alt="阶段 1：回合完成后的灰色建议预览"><br>
-      <sub><b>1. 回合正常完成</b> —— 空输入框浮现灰色建议与 <code>Tab</code> 标识，草稿仍为空，发送按钮保持未激活</sub>
+      <img src="docs/step-1-ghost.zh.svg" width="420" alt="阶段 1：回合完成后的灰色建议预览"><br>
+      <sub><b>1. 回合正常完成</b> —— 空输入框浮现灰色建议「运行相关回归测试，并总结失败原因」与 <code>Tab</code> 标识，发送按钮保持未激活</sub>
     </td>
     <td align="center">
-      <img src="docs/step-2-accepted.svg" width="420" alt="阶段 2：按 Tab 采纳为可编辑草稿"><br>
+      <img src="docs/step-2-accepted.zh.svg" width="420" alt="阶段 2：按 Tab 采纳为可编辑草稿"><br>
       <sub><b>2. 按 <code>Tab</code> 接受</b> —— 建议转为深色可编辑草稿、光标移至句尾、发送按钮亮起待发送（聊天流无自动消息）</sub>
     </td>
   </tr>
