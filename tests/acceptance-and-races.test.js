@@ -289,6 +289,40 @@ test('Acceptance 4: Async race guards — typing then deleting to empty, switchi
   assert.equal(machine3_p1.getVisibleSuggestion(), 'Plan模式测试')
   machine3_p1.dispose()
 
+  // P1 #3: Goal auto-continuation blocks ghost suggestions
+  const machine4_p1 = createClientSuggestionMachine({
+    fetchSuggestion: async () => ({ status: 'ready', turn: 1, suggestion: 'Goal模式测试' }),
+  })
+  machine4_p1.sync(baseEnv({ sessionId: 's-goal', running: false, goalActive: false, turnHint: 1 }))
+  await flushMicrotasks()
+  assert.equal(machine4_p1.getVisibleSuggestion(), 'Goal模式测试')
+
+  machine4_p1.sync(baseEnv({ sessionId: 's-goal', running: false, goalActive: true, turnHint: 1 }))
+  assert.equal(machine4_p1.getVisibleSuggestion(), null)
+
+  machine4_p1.sync(baseEnv({ sessionId: 's-goal', running: false, goalActive: false, turnHint: 1 }))
+  assert.equal(machine4_p1.getVisibleSuggestion(), 'Goal模式测试')
+  machine4_p1.dispose()
+
+  // P1 #4: RightArrow triggers acceptance on empty composer
+  const machine5_p1 = createClientSuggestionMachine({
+    fetchSuggestion: async () => ({ status: 'ready', turn: 1, suggestion: '右键测试' }),
+  })
+  let acceptedDraft = ''
+  machine5_p1.sync(baseEnv({ running: false, draft: '', turnHint: 1 }))
+  await flushMicrotasks()
+  assert.equal(machine5_p1.getVisibleSuggestion(), '右键测试')
+
+  const arrowEvent = makeKeyEvent('ArrowRight')
+  const consumed = machine5_p1.handleKeyDown(arrowEvent, {
+    isEditorFocused: true,
+    acceptDraft: (text) => { acceptedDraft = text },
+    focusEditor: () => {},
+  })
+  assert.equal(consumed, true)
+  assert.equal(acceptedDraft, '右键测试')
+  machine5_p1.dispose()
+
   // Race 3: Multi-session switching — never leaks onto session-b, preserves unconsumed suggestion on return to session-a
   // (even if InputHub recreates SessionInputShell with draftRev=0), and backfills turns that finished in background!
   let resolveSlowA

@@ -252,6 +252,8 @@ export function createClientPlugin(React, options = {}) {
             ? (rawPlan.pending ? !rawPlan.active : rawPlan.active)
             : rawPlan === true,
         )
+        const goal = typeof useProjection === 'function' ? useProjection('goal') : undefined
+        const goalActive = Boolean(goal?.goal?.phase === 'active')
 
         const buildEnvForAnchor = (anchorNode) => {
           const domGates = readComposerDomGates(anchorNode)
@@ -262,6 +264,7 @@ export function createClientPlugin(React, options = {}) {
             editorEditable: domGates.editorEditable,
             composerTakenOver: domGates.composerTakenOver,
             planActive,
+            goalActive,
             running,
             hasError: promptError !== null || retryableFailure !== null,
             submissionPending: pendingCount > 0 || queueLen > 0,

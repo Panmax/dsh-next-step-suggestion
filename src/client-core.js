@@ -170,6 +170,7 @@ export function isComposerInteractive(env) {
   if (env.promptAllowed === false) return false
   if (env.composerTakenOver) return false
   if (env.planActive) return false
+  if (env.goalActive) return false
   return true
 }
 
@@ -642,7 +643,12 @@ export function createClientSuggestionMachine(deps) {
     const slot = slots.get(env.sessionId)
     if (!slot || slot.activeSuggestion === null) return false
 
-    if (event.key === 'Tab') {
+    if (event.key === 'Tab' || event.key === 'ArrowRight') {
+      const isArrow = event.key === 'ArrowRight'
+      // ArrowRight only triggers if composer is empty (draftRev snapshot vs null)
+      // and selection is at the end (prevent accidental trigger while editing).
+      if (isArrow && (env.draft !== '' || !context.isEditorFocused)) return false
+
       event.preventDefault?.()
       event.stopPropagation?.()
       return acceptSuggestion(context)

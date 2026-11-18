@@ -198,12 +198,20 @@ export function extractTurnContext(events, maxInputBytes) {
   const previousUserPrompt = recentUserTexts.length > 1 ? clipHeadTail(recentUserTexts[0], 220, 220) : undefined
   const assistantReply = clipHeadTail(latestAssistantText, 650, 1750)
 
+  const toolFeatures = {
+    ranTests: toolCounts.has('bash') && Array.from(toolCounts.keys()).some(k => k.includes('test')),
+    ranGitCommit: toolCounts.has('bash') && Array.from(toolCounts.keys()).some(k => k.includes('commit')),
+    ranGitPush: toolCounts.has('bash') && Array.from(toolCounts.keys()).some(k => k.includes('push')),
+    editedFiles: toolCounts.has('fs-sandbox') || toolCounts.has('tool-fs'),
+  }
+
   const buildPayload = (prevUser, currUser, reply) => {
     const envelope = {
       ...(prevUser ? { previousUserPrompt: prevUser } : {}),
       userPrompt: currUser,
       ...(toolsUsed.length > 0 ? { toolsUsed } : {}),
       ...(toolErrorCount > 0 ? { toolErrorsInTurn: toolErrorCount } : {}),
+      toolFeatures,
       assistantFinalReply: reply,
     }
     return `Recent completed turn summary (JSON):\n${JSON.stringify(envelope)}`
