@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { Readable } from 'node:stream'
 import test from 'node:test'
 
-import { extractTurnContext, parseSuggestionOutput } from '../src/context.js'
+import { detectAssistantAwaitsHumanAction, extractTurnContext, parseSuggestionOutput } from '../src/context.js'
 import {
   CONFIG_ROUTE_PATH,
   createSuggestionCoordinator,
@@ -171,6 +171,50 @@ test('parseSuggestionOutput cleans valid user prompts and rejects NONE, slash co
   assert.equal(parseSuggestionOutput('等待后台任务完成'), null)
   assert.equal(parseSuggestionOutput('Continue waiting for the subagent result'), null)
   assert.equal(parseSuggestionOutput('Wait for the background job to finish'), null)
+  // Human-only browser/UI actions may never be delegated back to the agent as a suggestion.
+  assert.equal(parseSuggestionOutput('已硬刷新，麻烦按切走再切回的场景再验证一遍'), null)
+  assert.equal(parseSuggestionOutput('请刷新页面后观察界面再确认一下'), null)
+  assert.equal(parseSuggestionOutput('Please hard-refresh the page and verify it again'), null)
+})
+
+test('detectAssistantAwaitsHumanAction blocks suggestions when the assistant asks the human to verify manually', async () => {
+  const manualReply = '下一步（2分钟内）：硬刷新 http://127.0.0.1:3080，然后二选一测试：\n' +
+    '- 在 A 发任务后切到 B，等 A 完成再切回 A；\n' +
+    '如果仍没有，把新的 session id 和「切走/切回」的具体时间发我。'
+  assert.equal(detectAssistantAwaitsHumanAction(manualReply), true)
+  assert.equal(detectAssistantAwaitsHumanAction('下一步：运行回归测试并修复失败用例。'), false)
+  assert.equal(detectAssistantAwaitsHumanAction('已更新 client-entry.js 并重新构建。'), false)
+
+  const events = buildCompletedSessionEvents({ turn: 4, assistantText: manualReply })
+  const extracted = extractTurnContext(events, 6000)
+  assert.equal(extracted.eligible, true)
+  assert.equal(extracted.assistantAwaitsHumanAction, true)
+  assert.match(extracted.promptInput, /"assistantAwaitsHumanAction":true/)
+
+  let llmCalls = 0
+  const agent = {
+    id: 'sess-manual',
+    status: 'idle',
+    inbox: { nextTurn: [], nextStep: [] },
+    model: { current: () => ({ provider: 'mock', model: 'fast' }) },
+    session: {
+      id: 'sess-manual',
+      header: {},
+      snapshotEvents: () => events,
+    },
+  }
+  const coordinator = createSuggestionCoordinator({
+    agents: { get: id => (id === 'sess-manual' ? agent : undefined) },
+    llm: {
+      async prepareCall() {
+        llmCalls += 1
+        throw new Error('must not call LLM')
+      },
+    },
+  }, { timeoutMs: 2000 })
+  const outcome = await coordinator.suggest('sess-manual', 4)
+  assert.deepEqual(outcome, { status: 'none', turn: 4, suggestion: null, reason: 'assistant-awaits-human-action' })
+  assert.equal(llmCalls, 0)
 })
 
 test('resolveHostConfig validates bounds and provider/model pairing', () => {
