@@ -21,7 +21,30 @@ const ASSISTANT_VOICE_RE = /^(?:需要我|要我|是否需要我|要不要我|�
 const WAITING_PSEUDO_PROMPT_RE = /^(?:继续等待|等待(?:子代理|子智能体|后台|任务|脚本|审查|结果)|先等(?:待|子代理|后台|一下)|请等待|(?:continue|keep)\s+waiting\b|wait\s+for\s+(?:the\s+)?(?:subagent|agent|background|job|task|review|result)\b)/iu
 // Human-only browser/UI actions may never be delegated back to the agent as a suggestion.
 // This is a defense-in-depth output filter only; the semantic decision is made by the suggestion LLM.
-const MANUAL_UI_ACTION_RE = /(?:硬刷新|刷新(?:一下)?(?:页面|浏览器)|切走.{0,4}切回|切走\s*[/／]\s*切回|点击.{0,8}(?:按钮|链接|页面|图标)|观察(?:界面|页面)|肉眼(?:看|检查|确认)|hard[-\s]?refresh|refresh\s+the\s+(?:page|browser)|switch\s+(?:away|back)|click\s+(?:the|on)\s|visually\s+(?:check|verify|inspect)|observe\s+the\s+(?:ui|page|interface))/iu
+// It targets suggestions that *directly instruct* a manual UI action (or claim one was just done), so
+// test-writing suggestions such as "给切走再切回的场景补回归测试" and "Write a Playwright test that can
+// click the Save button" still pass.
+const MANUAL_UI_ACTION_PATTERN = [
+  '硬刷新',
+  '刷新(?:一下)?(?:页面|浏览器|界面)',
+  '切走.{0,4}切回(?!\\s*(?:的)?(?:场景|测试|用例))',
+  '切走\\s*[/／]\\s*切回(?!\\s*(?:的)?(?:场景|测试|用例))',
+  '点击.{0,10}(?:按钮|链接|页面|图标)',
+  '观察(?:界面|页面)',
+  '肉眼(?:看|检查|确认)',
+  'hard[-\\s]?refresh',
+  'refresh\\s+the\\s+(?:page|browser)',
+  'switch\\s+(?:away|back)(?:\\s+and\\s+back)?(?!\\s+(?:scenario|test|case))',
+  'click\\s+(?:the|on)\\s+\\S+',
+  'visually\\s+(?:check|verify|inspect)',
+  'observe\\s+the\\s+(?:ui|page|interface)',
+].join('|')
+const DIRECT_MANUAL_ACTION_RE = new RegExp(
+  `^(?:(?:请(?:你)?|麻烦(?:你)?|劳烦|please|kindly)\\s*)?(?:${MANUAL_UI_ACTION_PATTERN})`,
+  'iu',
+)
+const COMPLETED_MANUAL_CLAIM_RE = /^(?:已(?:经)?(?:硬刷新|刷新(?:了)?(?:页面|浏览器|界面))|我(?:已经)?(?:硬刷新|刷新(?:了)?(?:页面|浏览器|界面))|(?:i\s+(?:have\s+|'ve\s+)?)?(?:hard[-\s]?refreshed|refreshed\s+the\s+(?:page|browser)))/iu
+const VERIFY_REQUEST_RE = /(?:验证|确认|再试|检查|看看|verify|check|test|confirm|again)/iu
 const NONE_TOKENS = new Set(['none', 'n/a', 'null', 'nil', '无', '暂无', '没有', '不需要'])
 
 /**
@@ -309,7 +332,8 @@ export function parseSuggestionOutput(rawText) {
   if (/<\/?[a-z][^>]*>/iu.test(candidate)) return null
   if (ASSISTANT_VOICE_RE.test(candidate)) return null
   if (WAITING_PSEUDO_PROMPT_RE.test(candidate)) return null
-  if (MANUAL_UI_ACTION_RE.test(candidate)) return null
+  if (DIRECT_MANUAL_ACTION_RE.test(candidate)) return null
+  if (COMPLETED_MANUAL_CLAIM_RE.test(candidate) && VERIFY_REQUEST_RE.test(candidate)) return null
 
   return candidate
 }

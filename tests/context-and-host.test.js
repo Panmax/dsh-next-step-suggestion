@@ -171,13 +171,22 @@ test('parseSuggestionOutput cleans valid user prompts and rejects NONE, slash co
   assert.equal(parseSuggestionOutput('等待后台任务完成'), null)
   assert.equal(parseSuggestionOutput('Continue waiting for the subagent result'), null)
   assert.equal(parseSuggestionOutput('Wait for the background job to finish'), null)
-  // Human-only browser/UI actions may never be delegated back to the agent as a suggestion.
+  // Human-only browser/UI actions may never be delegated back to the agent as a suggestion,
+  // but valid test-writing suggestions that merely mention those actions must pass unchanged.
+  assert.equal(
+    parseSuggestionOutput('给切走再切回的场景补回归测试'),
+    '给切走再切回的场景补回归测试',
+  )
+  assert.equal(
+    parseSuggestionOutput('Write a Playwright test that can click the Save button'),
+    'Write a Playwright test that can click the Save button',
+  )
   assert.equal(parseSuggestionOutput('已硬刷新，麻烦按切走再切回的场景再验证一遍'), null)
   assert.equal(parseSuggestionOutput('请刷新页面后观察界面再确认一下'), null)
   assert.equal(parseSuggestionOutput('Please hard-refresh the page and verify it again'), null)
 })
 
-test('manual-verification replies reach the suggestion LLM, which decides NONE semantically across languages', async () => {
+test('manual-verification reply is sent to the suggestion LLM with the NONE rules, and a NONE response yields status none', async () => {
   const manualReply = '下一步（2分钟内）：硬刷新 http://127.0.0.1:3080，然后二选一测试：\n' +
     '- 在 A 发任务后切到 B，等 A 完成再切回 A；\n' +
     '如果仍没有，把新的 session id 和「切走/切回」的具体时间发我。'
@@ -190,6 +199,8 @@ test('manual-verification replies reach the suggestion LLM, which decides NONE s
   assert.match(extracted.promptInput, /"assistantFinalReply":"下一步/)
 
   let llmCalls = 0
+  /** @type {Record<string, any> | null} */
+  let capturedOptions = null
   const agent = {
     id: 'sess-manual',
     status: 'idle',
@@ -208,7 +219,8 @@ test('manual-verification replies reach the suggestion LLM, which decides NONE s
         llmCalls += 1
         return {
           config: callConfig,
-          async *stream() {
+          async *stream(options) {
+            capturedOptions = options
             yield { type: 'text-delta', index: 0, text: 'NONE' }
             yield { type: 'finish', reason: { kind: 'stop' } }
           },
@@ -217,8 +229,19 @@ test('manual-verification replies reach the suggestion LLM, which decides NONE s
     },
   }, { timeoutMs: 2000 })
   const outcome = await coordinator.suggest('sess-manual', 4)
+
+  // Assertions stay outside the mock stream so coordinator error swallowing cannot hide them.
   assert.deepEqual(outcome, { status: 'none', turn: 4, suggestion: null })
   assert.equal(llmCalls, 1)
+  assert.ok(capturedOptions !== null)
+  assert.match(
+    capturedOptions.system,
+    /When the assistant asks the human to perform such a manual step and report back, output ONLY NONE/u,
+  )
+  assert.match(capturedOptions.system, /NEVER claim the human already did something/u)
+  const sentPrompt = capturedOptions.messages[0].content[0].text
+  assert.match(sentPrompt, /硬刷新/u)
+  assert.match(sentPrompt, /切走\/切回/u)
 })
 
 test('resolveHostConfig validates bounds and provider/model pairing', () => {
