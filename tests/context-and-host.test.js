@@ -184,6 +184,23 @@ test('parseSuggestionOutput cleans valid user prompts and rejects NONE, slash co
   assert.equal(parseSuggestionOutput('已硬刷新，麻烦按切走再切回的场景再验证一遍'), null)
   assert.equal(parseSuggestionOutput('请刷新页面后观察界面再确认一下'), null)
   assert.equal(parseSuggestionOutput('Please hard-refresh the page and verify it again'), null)
+
+  // `switch back` is judged by its object: version switches are engineering suggestions, not manual UI steps.
+  assert.equal(
+    parseSuggestionOutput('Switch back to Node 22 and rerun the tests'),
+    'Switch back to Node 22 and rerun the tests',
+  )
+  // A leading UI phrase may describe a bug trigger condition; the actual request (add regression tests) still passes.
+  assert.equal(
+    parseSuggestionOutput('刷新页面后建议消失，请补回归测试'),
+    '刷新页面后建议消失，请补回归测试',
+  )
+  // Polite prefixes may carry sequencing words before the direct manual instruction.
+  assert.equal(parseSuggestionOutput('请先刷新页面，再确认问题是否还在'), null)
+  assert.equal(parseSuggestionOutput('Please first hard-refresh the page and verify again'), null)
+  // Completed-action claims cover "I've" without a space and Chinese "我已".
+  assert.equal(parseSuggestionOutput("I've hard-refreshed the page. Check the suggestion again"), null)
+  assert.equal(parseSuggestionOutput('我已硬刷新，麻烦再验证一遍'), null)
 })
 
 test('manual-verification reply is sent to the suggestion LLM with the NONE rules, and a NONE response yields status none', async () => {

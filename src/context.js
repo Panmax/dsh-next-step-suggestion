@@ -26,7 +26,7 @@ const WAITING_PSEUDO_PROMPT_RE = /^(?:继续等待|等待(?:子代理|子智能�
 // click the Save button" still pass.
 const MANUAL_UI_ACTION_PATTERN = [
   '硬刷新',
-  '刷新(?:一下)?(?:页面|浏览器|界面)',
+  '刷新(?:一下)?(?:页面|浏览器|界面)(?!\\s*后.{0,20}(?:消失|出现|报错|失败|问题|异常|崩溃|卡住|白屏))',
   '切走.{0,4}切回(?!\\s*(?:的)?(?:场景|测试|用例))',
   '切走\\s*[/／]\\s*切回(?!\\s*(?:的)?(?:场景|测试|用例))',
   '点击.{0,10}(?:按钮|链接|页面|图标)',
@@ -34,16 +34,17 @@ const MANUAL_UI_ACTION_PATTERN = [
   '肉眼(?:看|检查|确认)',
   'hard[-\\s]?refresh',
   'refresh\\s+the\\s+(?:page|browser)',
-  'switch\\s+(?:away|back)(?:\\s+and\\s+back)?(?!\\s+(?:scenario|test|case))',
+  'switch\\s+away\\s+and\\s+back(?!\\s+(?:scenario|test|case))',
+  'switch\\s+(?:away|back)\\s+to\\s+(?:the\\s+)?(?:page|browser|ui|interface|session)',
   'click\\s+(?:the|on)\\s+\\S+',
   'visually\\s+(?:check|verify|inspect)',
   'observe\\s+the\\s+(?:ui|page|interface)',
 ].join('|')
 const DIRECT_MANUAL_ACTION_RE = new RegExp(
-  `^(?:(?:请(?:你)?|麻烦(?:你)?|劳烦|please|kindly)\\s*)?(?:${MANUAL_UI_ACTION_PATTERN})`,
+  `^(?:(?:请(?:你)?|麻烦(?:你)?|劳烦|please|kindly)\\s*)?(?:先|首先|first(?:ly)?\\s+)?(?:${MANUAL_UI_ACTION_PATTERN})`,
   'iu',
 )
-const COMPLETED_MANUAL_CLAIM_RE = /^(?:已(?:经)?(?:硬刷新|刷新(?:了)?(?:页面|浏览器|界面))|我(?:已经)?(?:硬刷新|刷新(?:了)?(?:页面|浏览器|界面))|(?:i\s+(?:have\s+|'ve\s+)?)?(?:hard[-\s]?refreshed|refreshed\s+the\s+(?:page|browser)))/iu
+const COMPLETED_MANUAL_CLAIM_RE = /^(?:(?:已(?:经)?|我(?:已经|已)?)(?:硬刷新|刷新(?:了)?(?:页面|浏览器|界面))|i(?:\s+have|'ve|\s+)?\s*(?:hard[-\s]?refreshed|refreshed\s+the\s+(?:page|browser)))/iu
 const VERIFY_REQUEST_RE = /(?:验证|确认|再试|检查|看看|verify|check|test|confirm|again)/iu
 const NONE_TOKENS = new Set(['none', 'n/a', 'null', 'nil', '无', '暂无', '没有', '不需要'])
 
