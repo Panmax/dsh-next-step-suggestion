@@ -198,8 +198,27 @@ test('parseSuggestionOutput cleans valid user prompts and rejects NONE, slash co
   // Polite prefixes may carry sequencing words before the direct manual instruction.
   assert.equal(parseSuggestionOutput('请先刷新页面，再确认问题是否还在'), null)
   assert.equal(parseSuggestionOutput('Please first hard-refresh the page and verify again'), null)
-  // Completed-action claims cover "I've" without a space and Chinese "我已".
+  // A refresh clause followed by a re-test request is a manual instruction; a described fault plus a
+  // request to add regression tests stays a valid engineering suggestion.
+  assert.equal(parseSuggestionOutput('请刷新页面后确认问题是否还在'), null)
+  assert.equal(parseSuggestionOutput('刷新页面后检查是否仍然报错'), null)
+  assert.equal(
+    parseSuggestionOutput('刷新页面后建议消失，请补回归测试'),
+    '刷新页面后建议消失，请补回归测试',
+  )
+  // `switch back` object matching respects word boundaries and common determiners.
+  assert.equal(
+    parseSuggestionOutput('Switch back to sessionStorage and rerun the tests'),
+    'Switch back to sessionStorage and rerun the tests',
+  )
+  assert.equal(parseSuggestionOutput('Switch back to this session and verify the UI'), null)
+  assert.equal(
+    parseSuggestionOutput('Switch back to Node 22 and rerun the tests'),
+    'Switch back to Node 22 and rerun the tests',
+  )
+  // Completed-action claims cover "I've" and the omitted English subject.
   assert.equal(parseSuggestionOutput("I've hard-refreshed the page. Check the suggestion again"), null)
+  assert.equal(parseSuggestionOutput('Refreshed the page, please verify again'), null)
   assert.equal(parseSuggestionOutput('我已硬刷新，麻烦再验证一遍'), null)
 })
 
