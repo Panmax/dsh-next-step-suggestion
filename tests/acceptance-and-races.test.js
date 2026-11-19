@@ -61,6 +61,13 @@ test('Bundle manifest, locales, icon, CSS tokens, and built client.js stay in sy
   assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml')
   assert.equal(pkg.dsh?.client?.platform, 'web')
 
+  // Cordis refuses undeclared service access at apply/render time; every service read by the client
+  // must be declared here so boot waits for it instead of failing the whole plugin.
+  const plugin = createClientPlugin({ createElement: () => null })
+  for (const service of ['slots', 'locale', 'sessions', 'jobs', 'layout', 'inputTriggers', 'commandUi']) {
+    assert.ok(plugin.inject.includes(service), `client plugin must inject ${service}`)
+  }
+
   const en = JSON.parse(readFileSync(resolve(rootDir, 'locale/en.json'), 'utf8'))
   const zh = JSON.parse(readFileSync(resolve(rootDir, 'locale/zh.json'), 'utf8'))
   assert.ok(en.meta?.title?.length > 0 && en.meta?.description?.length > 0)
@@ -111,7 +118,7 @@ test('Bundle manifest, locales, icon, CSS tokens, and built client.js stay in sy
   assert.match(SUGGESTION_CSS, /\.dsh-nss-kbd\s*\{[\s\S]*?\bpointer-events:\s*auto\s*;/u)
 })
 
-test('Acceptance 1 & 2: Normal turn end shows ghost suggestion separated from draft; Tab accepts into editable draft without sending; Esc dismisses', async () => {
+test('Acceptance 1 & 2: normal turn end shows ghost suggestion; Tab accepts into editable draft without sending; clearing the draft restores it; Esc is not intercepted', async () => {
   let fetchCount = 0
   const sentMessages = []
   let editorDraft = ''
@@ -145,7 +152,7 @@ test('Acceptance 1 & 2: Normal turn end shows ghost suggestion separated from dr
   assert.equal(editorDraft, '')
   assert.equal(sentMessages.length, 0)
 
-  // Pressing Tab while focused accepts suggestion into editable draft, clears preview, and does NOT send.
+  // Pressing Tab while focused accepts suggestion into editable draft and does NOT send.
   const tabEvent = makeKeyEvent('Tab')
   const consumed = machine.handleKeyDown(tabEvent, {
     isEditorFocused: true,
@@ -158,22 +165,33 @@ test('Acceptance 1 & 2: Normal turn end shows ghost suggestion separated from dr
   assert.equal(consumed, true)
   assert.equal(tabEvent.defaultPrevented, true)
   assert.equal(editorDraft, '运行相关回归测试，并总结失败原因')
-  assert.equal(machine.getVisibleSuggestion(), null)
-  // Chat history has NO new sent user message until user explicitly submits.
   assert.equal(sentMessages.length, 0)
 
-  // User edits the accepted draft and explicitly sends it.
-  editorDraft = `${editorDraft}（仅限 auth 模块）`
+  // Draft now non-empty -> preview hides, but the suggestion stays cached.
+  machine.sync(baseEnv({ running: false, draft: editorDraft, draftRev: editorRev, turnHint: 1 }))
+  assert.equal(machine.getVisibleSuggestion(), null)
+
+  // Clearing the composer brings the same suggestion back without another request.
+  editorDraft = ''
+  editorRev += 1
+  machine.sync(baseEnv({ running: false, draft: editorDraft, draftRev: editorRev, turnHint: 1 }))
+  assert.equal(machine.getVisibleSuggestion(), '运行相关回归测试，并总结失败原因')
+  assert.equal(fetchCount, 1)
+
+  // Esc is no longer a plugin shortcut: it passes through and the preview stays visible.
+  const escEvent = makeKeyEvent('Escape')
+  assert.equal(machine.handleKeyDown(escEvent, { isEditorFocused: true, acceptDraft: () => {} }), false)
+  assert.equal(escEvent.defaultPrevented, false)
+  assert.equal(machine.getVisibleSuggestion(), '运行相关回归测试，并总结失败原因')
+
+  // User edits the accepted draft and explicitly sends it; starting a new turn clears the old suggestion.
+  editorDraft = '运行相关回归测试，并总结失败原因（仅限 auth 模块）'
   sentMessages.push(editorDraft)
   assert.equal(sentMessages.length, 1)
+  machine.sync(baseEnv({ running: true, draft: '', draftRev: 3, turnHint: 2 }))
+  assert.equal(machine.getVisibleSuggestion(), null)
 
-  // Turn 2: verify Esc dismisses visible preview only when unclaimed, then passes subsequent Esc.
-  machine.sync(baseEnv({ running: true, draft: '', draftRev: 2, turnHint: 2 }))
-  machine.sync(baseEnv({ running: false, draft: '', draftRev: 2, turnHint: 2 }))
-  await flushMicrotasks()
-  // Note: fetchSuggestion returned turn: 1 above; let's test Esc on a fresh machine returning turn 2.
-  machine.dispose()
-
+  // Turn 2 completes -> a fresh suggestion is generated and Tab still accepts it.
   const machine2 = createClientSuggestionMachine({
     fetchSuggestion: async () => ({ status: 'ready', turn: 2, suggestion: '提交修复并查看 git diff' }),
   })
@@ -182,19 +200,15 @@ test('Acceptance 1 & 2: Normal turn end shows ghost suggestion separated from dr
   await flushMicrotasks()
   assert.equal(machine2.getVisibleSuggestion(), '提交修复并查看 git diff')
 
-  const escWhenClaimed = makeKeyEvent('Escape', { defaultPrevented: true })
-  assert.equal(machine2.handleKeyDown(escWhenClaimed, { isEditorFocused: true, acceptDraft: () => {} }), false)
-  assert.equal(machine2.getVisibleSuggestion(), '提交修复并查看 git diff')
-
-  const escClean = makeKeyEvent('Escape')
-  assert.equal(machine2.handleKeyDown(escClean, { isEditorFocused: true, acceptDraft: () => {} }), true)
-  assert.equal(escClean.defaultPrevented, true)
-  assert.equal(machine2.getVisibleSuggestion(), null)
-
-  const escAgain = makeKeyEvent('Escape')
-  assert.equal(machine2.handleKeyDown(escAgain, { isEditorFocused: true, acceptDraft: () => {} }), false)
-  assert.equal(escAgain.defaultPrevented, false)
+  const tab2 = makeKeyEvent('Tab')
+  let accepted2 = ''
+  assert.equal(machine2.handleKeyDown(tab2, {
+    isEditorFocused: true,
+    acceptDraft: (text) => { accepted2 = text },
+  }), true)
+  assert.equal(accepted2, '提交修复并查看 git diff')
   machine2.dispose()
+  machine.dispose()
 })
 
 test('Acceptance 3: Existing draft, open completion popup, unfocused editor, Shift+Tab, or no suggestion leaves Tab untouched', async () => {
@@ -213,13 +227,16 @@ test('Acceptance 3: Existing draft, open completion popup, unfocused editor, Shi
   machine.sync(baseEnv({ running: false, draft: '我已经在写草稿了', draftRev: 5, turnHint: 1 }))
   await flushMicrotasks()
   assert.equal(fetchCount, 0)
+  // Clearing the draft later does not retroactively generate for a dirty turn end.
+  machine.sync(baseEnv({ running: false, draft: '', draftRev: 6, turnHint: 1 }))
+  assert.equal(fetchCount, 0)
   const tabWithDraft = makeKeyEvent('Tab')
   assert.equal(machine.handleKeyDown(tabWithDraft, { isEditorFocused: true, acceptDraft: () => {} }), false)
   assert.equal(tabWithDraft.defaultPrevented, false)
 
   // Case B: Model returns no suggestion (`status: 'none'`) -> Tab stays untouched.
-  machine.sync(baseEnv({ running: true, draft: '', draftRev: 6, turnHint: 2 }))
-  machine.sync(baseEnv({ running: false, draft: '', draftRev: 6, turnHint: 2 }))
+  machine.sync(baseEnv({ running: true, draft: '', draftRev: 7, turnHint: 2 }))
+  machine.sync(baseEnv({ running: false, draft: '', draftRev: 7, turnHint: 2 }))
   await flushMicrotasks()
   assert.equal(fetchCount, 1)
   assert.equal(machine.getVisibleSuggestion(), null)
@@ -228,8 +245,8 @@ test('Acceptance 3: Existing draft, open completion popup, unfocused editor, Shi
   assert.equal(tabNoSuggestion.defaultPrevented, false)
 
   // Case C: Suggestion exists, check unfocused editor, Shift+Tab, and open completion popup (`/` or `@` menu).
-  machine.sync(baseEnv({ running: true, draft: '', draftRev: 7, turnHint: 3 }))
-  machine.sync(baseEnv({ running: false, draft: '', draftRev: 7, turnHint: 3 }))
+  machine.sync(baseEnv({ running: true, draft: '', draftRev: 8, turnHint: 3 }))
+  machine.sync(baseEnv({ running: false, draft: '', draftRev: 8, turnHint: 3 }))
   await flushMicrotasks()
   assert.equal(machine.getVisibleSuggestion(), '运行单元测试')
 
@@ -244,7 +261,7 @@ test('Acceptance 3: Existing draft, open completion popup, unfocused editor, Shi
   assert.equal(shiftTab.defaultPrevented, false)
 
   // Completion popup opens (`popupOpen: true`) -> preview hides and Tab passes to completion menu!
-  machine.sync(baseEnv({ running: false, draft: '', draftRev: 7, popupOpen: true, turnHint: 3 }))
+  machine.sync(baseEnv({ running: false, draft: '', draftRev: 8, popupOpen: true, turnHint: 3 }))
   assert.equal(machine.getVisibleSuggestion(), null)
   const tabPopupOpen = makeKeyEvent('Tab')
   assert.equal(machine.handleKeyDown(tabPopupOpen, { isEditorFocused: true, acceptDraft: () => {} }), false)
@@ -253,8 +270,8 @@ test('Acceptance 3: Existing draft, open completion popup, unfocused editor, Shi
   machine.dispose()
 })
 
-test('Acceptance 4: Async race guards — typing then deleting to empty, switching sessions, or starting a new turn suppresses late suggestions', async () => {
-  // Race 1: User types and deletes back to empty BEFORE async suggestion resolves.
+test('Acceptance 4: non-destructive edits and async race guards — type/delete restores cached suggestions; sessions and new turns stay isolated', async () => {
+  // Race 1: User types and deletes back to empty BEFORE async suggestion resolves -> the result still appears.
   let resolveSlow1
   const machine1 = createClientSuggestionMachine({
     fetchSuggestion: () => new Promise((resolvePromise) => { resolveSlow1 = resolvePromise }),
@@ -263,18 +280,36 @@ test('Acceptance 4: Async race guards — typing then deleting to empty, switchi
   machine1.sync(baseEnv({ running: false, draft: '', draftRev: 10, turnHint: 1 }))
 
   // User types 'a' (draftRev 11) and deletes back to '' (draftRev 12) while request is still in flight.
-  machine1.notifyUserEditIntent()
   machine1.sync(baseEnv({ running: false, draft: 'a', draftRev: 11, turnHint: 1 }))
   machine1.sync(baseEnv({ running: false, draft: '', draftRev: 12, turnHint: 1 }))
 
   resolveSlow1({ status: 'ready', turn: 1, suggestion: '迟到的建议1' })
   await flushMicrotasks()
-  assert.equal(machine1.getVisibleSuggestion(), null)
+  assert.equal(machine1.getVisibleSuggestion(), '迟到的建议1')
   machine1.dispose()
 
-  // Race 2: Suggestion already visible -> user types 'x' -> suggestion disappears -> user deletes back to '' -> stays gone!
+  // Race 1b: Suggestion resolves while the user still has a draft -> cached silently, then visible after clearing.
+  let resolveSlow1b
+  const machine1b = createClientSuggestionMachine({
+    fetchSuggestion: () => new Promise((resolvePromise) => { resolveSlow1b = resolvePromise }),
+  })
+  machine1b.sync(baseEnv({ running: true, draft: '', draftRev: 20, turnHint: 1 }))
+  machine1b.sync(baseEnv({ running: false, draft: '', draftRev: 20, turnHint: 1 }))
+  machine1b.sync(baseEnv({ running: false, draft: '用户的草稿', draftRev: 21, turnHint: 1 }))
+  resolveSlow1b({ status: 'ready', turn: 1, suggestion: '草稿期间的迟到建议' })
+  await flushMicrotasks()
+  assert.equal(machine1b.getVisibleSuggestion(), null)
+  machine1b.sync(baseEnv({ running: false, draft: '', draftRev: 22, turnHint: 1 }))
+  assert.equal(machine1b.getVisibleSuggestion(), '草稿期间的迟到建议')
+  machine1b.dispose()
+
+  // Race 2: Suggestion visible -> type 'x' hides it -> delete back to '' restores the same suggestion, without refetch.
+  let fetchCount2 = 0
   const machine2 = createClientSuggestionMachine({
-    fetchSuggestion: async () => ({ status: 'ready', turn: 1, suggestion: '可见建议' }),
+    fetchSuggestion: async () => {
+      fetchCount2 += 1
+      return { status: 'ready', turn: 1, suggestion: '可见建议' }
+    },
   })
   machine2.sync(baseEnv({ running: true, draft: '', draftRev: 1, turnHint: 1 }))
   machine2.sync(baseEnv({ running: false, draft: '', draftRev: 1, turnHint: 1 }))
@@ -284,7 +319,8 @@ test('Acceptance 4: Async race guards — typing then deleting to empty, switchi
   machine2.sync(baseEnv({ running: false, draft: 'x', draftRev: 2, turnHint: 1 }))
   assert.equal(machine2.getVisibleSuggestion(), null)
   machine2.sync(baseEnv({ running: false, draft: '', draftRev: 3, turnHint: 1 }))
-  assert.equal(machine2.getVisibleSuggestion(), null)
+  assert.equal(machine2.getVisibleSuggestion(), '可见建议')
+  assert.equal(fetchCount2, 1)
   machine2.dispose()
 
   // P1 #5: Plan Mode blocks ghost suggestions
@@ -368,13 +404,14 @@ test('Acceptance 4: Async race guards — typing then deleting to empty, switchi
   machine3.sync(baseEnv({ sessionId: 'session-a', running: false, draft: '', draftRev: 0, turnHint: 1 }))
   assert.equal(machine3.getVisibleSuggestion(), '仅属于会话A的建议')
 
-  // Consume/invalidate in session-a (type then delete to empty), switch away and return -> stays permanently gone!
+  // Edit then clear in session-a -> the same suggestion returns; switching away and back keeps it cached.
   machine3.sync(baseEnv({ sessionId: 'session-a', running: false, draft: 'z', draftRev: 1, turnHint: 1 }))
-  machine3.sync(baseEnv({ sessionId: 'session-a', running: false, draft: '', draftRev: 2, turnHint: 1 }))
   assert.equal(machine3.getVisibleSuggestion(), null)
+  machine3.sync(baseEnv({ sessionId: 'session-a', running: false, draft: '', draftRev: 2, turnHint: 1 }))
+  assert.equal(machine3.getVisibleSuggestion(), '仅属于会话A的建议')
   machine3.sync(baseEnv({ sessionId: 'session-b', running: false, draft: '', draftRev: 0, turnHint: 5 }))
   machine3.sync(baseEnv({ sessionId: 'session-a', running: false, draft: '', draftRev: 0, turnHint: 1 }))
-  assert.equal(machine3.getVisibleSuggestion(), null)
+  assert.equal(machine3.getVisibleSuggestion(), '仅属于会话A的建议')
 
   // Background-running session observed via sidebar list + transient non-foreground mount frame -> still backfills!
   machine3.noteSessionRunning('session-bg')
@@ -862,12 +899,12 @@ test('P0 #1 (Machine): blocked editor, denied prompt access, composer takeover, 
   machine.sync(baseEnv({ sessionId: 's-block', running: false, composerTakenOver: false, turnHint: 1 }))
   assert.equal(machine.getVisibleSuggestion(), '运行单元测试并检查覆盖率')
 
-  // 4. Inserting an inline quote/reference decorator (`hasInlineDecorators: true`) permanently invalidates this turn's suggestion
-  //    even if `draft` stays `''` and the quote is subsequently removed!
+  // 4. Inserting an inline quote/reference decorator hides the preview temporarily; removing it restores the cache.
   machine.sync(baseEnv({ sessionId: 's-block', running: false, draft: '', hasInlineDecorators: true, turnHint: 1 }))
   assert.equal(machine.getVisibleSuggestion(), null)
   machine.sync(baseEnv({ sessionId: 's-block', running: false, draft: '', hasInlineDecorators: false, turnHint: 1 }))
-  assert.equal(machine.getVisibleSuggestion(), null)
+  assert.equal(machine.getVisibleSuggestion(), '运行单元测试并检查覆盖率')
+  assert.equal(fetchCount, 1)
 
   machine.dispose()
 })
@@ -1030,7 +1067,7 @@ test('P0 #1 (DOM + MutationObserver): NextStepOverlay yields to disabled/blocked
     vnode = renderOverlay()
     assert.ok(vnode.children[0] !== null)
 
-    // E. Inserting an atomic reply quote (`[data-composer-quote]`) invalidates the turn permanently.
+    // E. Inserting an atomic reply quote hides the preview; removing it restores the same cached suggestion.
     cardDom.setQuotePresent(true)
     activeObservers[0].cb()
     vnode = renderOverlay()
@@ -1039,16 +1076,17 @@ test('P0 #1 (DOM + MutationObserver): NextStepOverlay yields to disabled/blocked
     cardDom.setQuotePresent(false)
     activeObservers[0].cb()
     vnode = renderOverlay()
-    assert.equal(vnode.children[0], null)
+    assert.ok(vnode.children[0] !== null)
 
-    // Also verify structured `input.occurrences` invalidates on a subsequent turn.
+    // Also verify structured `input.occurrences` suppress generation on a subsequent turn.
     agentRunning = true
     renderOverlay()
     agentRunning = false
     occurrences = [{ id: 'occ-1', start: 0, end: 5 }]
-    renderOverlay()
+    vnode = renderOverlay()
     await flushMicrotasks()
     assert.equal(fetchCalls, 1)
+    assert.equal(vnode.children[0], null)
 
     mockReact.unmount()
     assert.equal(activeObservers.length, 0)
@@ -1166,13 +1204,14 @@ test('P0 #4 (Clickable/tappable Tab badge): clicking Tab pill accepts into draft
   assert.deepEqual(cardDom.editorEl.focusCalls[0], { preventScroll: true })
   assert.equal(cardDom.doc.activeElement, cardDom.editorEl)
 
-  // Subsequent render hides the ghost preview and will not re-show if draft is cleared back to empty.
+  // Subsequent render hides the preview because the draft is non-empty; clearing it restores the cached suggestion.
   vnode = renderOverlay()
   assert.equal(vnode.children[0], null)
   draftText = ''
   draftRev += 1
   vnode = renderOverlay()
-  assert.equal(vnode.children[0], null)
+  assert.ok(vnode.children[0] !== null)
+  assert.equal(vnode.children[0].children[0].children[0], '在触屏上点击 Tab 采纳草稿')
 
   // Turn 2: when editor is ALREADY focused, clicking badge accepts without redundant `.focus()` call (preserving Lexical selection).
   currentTurn = 2

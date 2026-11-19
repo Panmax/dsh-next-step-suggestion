@@ -182,7 +182,7 @@ export function createClientPlugin(React, options = {}) {
 
   return {
     name: 'next-step-suggestion',
-    inject: ['slots', 'locale'],
+    inject: ['slots', 'locale', 'sessions', 'jobs', 'layout', 'inputTriggers', 'commandUi'],
     apply(ctx) {
       // Plugin-scoped state machine survives session-slot unmount/remount across session switches
       // and disposes cleanly when the plugin itself is disabled or hot-reloaded.
@@ -381,8 +381,6 @@ export function createClientPlugin(React, options = {}) {
         }
 
         const envSnapshot = buildEnvForAnchor(anchorRef.current)
-        const envRef = React.useRef(envSnapshot)
-        envRef.current = envSnapshot
 
         const buildEnvRef = React.useRef(buildEnvForAnchor)
         buildEnvRef.current = buildEnvForAnchor
@@ -410,9 +408,7 @@ export function createClientPlugin(React, options = {}) {
 
         // Synchronize committed DOM + React environment snapshot after commit.
         React.useEffect(() => {
-          const committedEnv = buildEnvRef.current(anchorRef.current)
-          envRef.current = committedEnv
-          machine.sync(committedEnv)
+          machine.sync(buildEnvRef.current(anchorRef.current))
         })
 
         React.useLayoutEffect(() => {
@@ -476,13 +472,8 @@ export function createClientPlugin(React, options = {}) {
           const card = anchor?.closest?.('[data-composer-card]')
           if (!card) return undefined
 
-          const onEditIntent = () => {
-            machine.notifyUserEditIntent(envRef.current.sessionId)
-          }
-
           const onKeyDown = (ev) => {
             const liveEnv = buildEnvRef.current(anchorRef.current)
-            envRef.current = liveEnv
             if (liveEnv.popupOpen) return
             const editor = findEditorElement(card)
             const active = card.ownerDocument?.activeElement ?? (typeof document !== 'undefined' ? document.activeElement : null)
@@ -496,17 +487,9 @@ export function createClientPlugin(React, options = {}) {
             })
           }
 
-          card.addEventListener('beforeinput', onEditIntent, true)
-          card.addEventListener('compositionstart', onEditIntent, true)
-          card.addEventListener('paste', onEditIntent, true)
-          card.addEventListener('drop', onEditIntent, true)
           card.addEventListener('keydown', onKeyDown, false)
 
           return () => {
-            card.removeEventListener('beforeinput', onEditIntent, true)
-            card.removeEventListener('compositionstart', onEditIntent, true)
-            card.removeEventListener('paste', onEditIntent, true)
-            card.removeEventListener('drop', onEditIntent, true)
             card.removeEventListener('keydown', onKeyDown, false)
           }
         }, [sessionId])
@@ -521,7 +504,6 @@ export function createClientPlugin(React, options = {}) {
           ev?.preventDefault?.()
           ev?.stopPropagation?.()
           const liveEnv = buildEnvRef.current(anchorRef.current)
-          envRef.current = liveEnv
           if (liveEnv.popupOpen) return
           machine.acceptSuggestion({
             liveEnv,

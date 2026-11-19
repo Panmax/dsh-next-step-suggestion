@@ -71,49 +71,49 @@ export const LOCALES = {
     ...CONFIG_STRINGS_ZH,
     'tab.hint': 'Tab',
     'accept.label': '采纳下一步建议',
-    'preview.aria': '下一步建议：{text}，按 Tab 或点击徽章接受，按 Esc 关闭',
+    'preview.aria': '下一步建议：{text}，按 Tab 或点击徽章接受',
   },
   en: {
     ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': 'Accept next-step suggestion',
-    'preview.aria': 'Next-step suggestion: {text}. Press Tab or click badge to accept, or Esc to dismiss.',
+    'preview.aria': 'Next-step suggestion: {text}. Press Tab or click the badge to accept.',
   },
   ja: {
     ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': '次のステップの提案を採用',
-    'preview.aria': '次のステップの提案: {text}（Tabまたはクリックで採用、Escで閉じる）',
+    'preview.aria': '次のステップの提案: {text}（Tabまたはクリックで採用）',
   },
   es: {
     ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': 'Aceptar sugerencia siguiente',
-    'preview.aria': 'Sugerencia siguiente: {text}. Pulsa Tab o haz clic para aceptar, o Esc para cerrar.',
+    'preview.aria': 'Sugerencia siguiente: {text}. Pulsa Tab o haz clic en la insignia para aceptar.',
   },
   fr: {
     ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': 'Accepter la suggestion suivante',
-    'preview.aria': 'Suggestion suivante : {text}. Appuyez sur Tab ou cliquez pour accepter, ou Échap pour fermer.',
+    'preview.aria': 'Suggestion suivante : {text}. Appuyez sur Tab ou cliquez sur le badge pour accepter.',
   },
   de: {
     ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': 'Vorschlag übernehmen',
-    'preview.aria': 'Nächster Schritt: {text}. Tab oder Klick zum Übernehmen, Esc zum Schließen.',
+    'preview.aria': 'Nächster Schritt: {text}. Tab oder Klick auf die Schaltfläche zum Übernehmen.',
   },
   ru: {
     ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': 'Принять предложение',
-    'preview.aria': 'Следующий шаг: {text}. Нажмите Tab или кнопку, чтобы принять, или Esc, чтобы скрыть.',
+    'preview.aria': 'Следующий шаг: {text}. Нажмите Tab или кнопку, чтобы принять.',
   },
   pt: {
     ...CONFIG_STRINGS_EN,
     'tab.hint': 'Tab',
     'accept.label': 'Aceitar próxima sugestão',
-    'preview.aria': 'Próxima sugestão: {text}. Pressione Tab ou clique para aceitar, ou Esc para fechar.',
+    'preview.aria': 'Próxima sugestão: {text}. Pressione Tab ou clique no selo para aceitar.',
   },
 }
 
@@ -474,13 +474,11 @@ export function createClientSuggestionMachine(deps) {
   /**
    * @typedef {{
    *   sawRunning: boolean,
-   *   baselineDraftRev: number | null,
    *   epochInvalidated: boolean,
    *   activeSuggestion: { turn: number | null, text: string } | null,
    *   activeRequestSeq: number,
    *   activeAbort: AbortController | null,
    *   requestedTurns: Set<number>,
-   *   dismissedTurns: Set<number>,
    *   lastEnv: Record<string, any> | null,
    * }} SessionSlot
    */
@@ -522,13 +520,11 @@ export function createClientSuggestionMachine(deps) {
     }
     slot = {
       sawRunning: false,
-      baselineDraftRev: null,
       epochInvalidated: true,
       activeSuggestion: null,
       activeRequestSeq: 0,
       activeAbort: null,
       requestedTurns: new Set(),
-      dismissedTurns: new Set(),
       lastEnv: null,
     }
     slots.set(sessionId, slot)
@@ -551,36 +547,6 @@ export function createClientSuggestionMachine(deps) {
   }
 
   /**
-   * Permanently invalidate a session's current completed turn suggestion (on typing, Tab accept, Esc, or new turn).
-   * @param {string | null | undefined} targetSessionId
-   */
-  function invalidateSessionTurn(targetSessionId = activeSessionId) {
-    if (!targetSessionId) return
-    const slot = slots.get(targetSessionId)
-    if (!slot) return
-
-    const hadSuggestion = slot.activeSuggestion !== null
-    if (slot.activeSuggestion !== null && typeof slot.activeSuggestion.turn === 'number') {
-      slot.dismissedTurns.add(slot.activeSuggestion.turn)
-    }
-    const envTurn = slot.lastEnv && typeof slot.lastEnv.turnHint === 'number' ? slot.lastEnv.turnHint : null
-    if (envTurn !== null) {
-      slot.dismissedTurns.add(envTurn)
-    } else {
-      slot.dismissedTurns.add(UNKNOWN_TURN_KEY)
-    }
-
-    slot.epochInvalidated = true
-    slot.activeSuggestion = null
-    cancelSlotInflight(slot)
-    if (hadSuggestion) notify()
-  }
-
-  function invalidateCurrentTurn() {
-    invalidateSessionTurn(currentEnv?.sessionId ?? activeSessionId)
-  }
-
-  /**
    * Record that a session was observed running in the sidebar session list (even while another session is open),
    * clearing any stale cached suggestion for that session and arming backfill when the user switches into it.
    * @param {string} sessionId
@@ -590,10 +556,8 @@ export function createClientSuggestionMachine(deps) {
     const slot = slotOf(sessionId)
     const hadSuggestion = slot.activeSuggestion !== null
     slot.sawRunning = true
-    slot.baselineDraftRev = null
     slot.epochInvalidated = true
     slot.activeSuggestion = null
-    slot.dismissedTurns.delete(UNKNOWN_TURN_KEY)
     cancelSlotInflight(slot)
     if (hadSuggestion && activeSessionId === sessionId) notify()
   }
@@ -602,12 +566,11 @@ export function createClientSuggestionMachine(deps) {
     const turnHint = typeof env.turnHint === 'number' ? env.turnHint : undefined
     const turnKey = turnHint ?? UNKNOWN_TURN_KEY
 
-    if (slot.requestedTurns.has(turnKey) || slot.dismissedTurns.has(turnKey)) {
+    if (slot.requestedTurns.has(turnKey)) {
       return
     }
     slot.requestedTurns.add(turnKey)
 
-    slot.baselineDraftRev = env.draftRev
     slot.epochInvalidated = false
 
     const reqSeq = ++slot.activeRequestSeq
@@ -629,18 +592,6 @@ export function createClientSuggestionMachine(deps) {
         slot.activeAbort = null
         if (slot.epochInvalidated) return
 
-        const latestEnv = slot.lastEnv
-        if (latestEnv !== null && !isSessionDraftClean(latestEnv)) {
-          invalidateSessionTurn(sessionId)
-          return
-        }
-        // Check same-visit draft mutation while this session remained mounted.
-        if (latestEnv !== null && activeSessionId === sessionId
-          && slot.baselineDraftRev !== null && latestEnv.draftRev !== slot.baselineDraftRev) {
-          invalidateSessionTurn(sessionId)
-          return
-        }
-
         if (!result || result.status !== 'ready' || typeof result.suggestion !== 'string') {
           if (typeof result?.turn === 'number') {
             slot.requestedTurns.add(result.turn)
@@ -654,9 +605,6 @@ export function createClientSuggestionMachine(deps) {
         const resolvedTurn = typeof result.turn === 'number' ? result.turn : (turnHint ?? null)
         if (resolvedTurn !== null) {
           slot.requestedTurns.add(resolvedTurn)
-          if (slot.dismissedTurns.has(resolvedTurn)) return
-        } else if (slot.dismissedTurns.has(UNKNOWN_TURN_KEY)) {
-          return
         }
 
         slot.activeSuggestion = {
@@ -694,24 +642,16 @@ export function createClientSuggestionMachine(deps) {
     if (nextEnv.running) {
       const hadSuggestion = slot.activeSuggestion !== null
       slot.sawRunning = true
-      slot.baselineDraftRev = null
       slot.epochInvalidated = true
       slot.activeSuggestion = null
-      slot.dismissedTurns.delete(UNKNOWN_TURN_KEY)
       cancelSlotInflight(slot)
       if (hadSuggestion || switchedSession) notify()
       return
     }
 
-    // 2. Switched into an idle session: re-anchor `baselineDraftRev` to the newly mounted SessionInputShell
-    //    when its draft is clean, or invalidate if the session now carries an unsent draft/error.
+    // 2. Switched into an idle session: restore a cached suggestion regardless of draft state
+    //    (display is gated by the live composer), or backfill a turn that finished in the background.
     if (switchedSession) {
-      if (!isSessionDraftClean(nextEnv)) {
-        invalidateSessionTurn(sessionId)
-        notify()
-        return
-      }
-
       // If a cached suggestion exists for an older turn than `turnHint`, drop the outdated cache.
       if (slot.activeSuggestion !== null
         && typeof nextEnv.turnHint === 'number'
@@ -722,16 +662,19 @@ export function createClientSuggestionMachine(deps) {
       }
 
       if (slot.activeSuggestion !== null) {
-        // Re-anchor baselineDraftRev because InputHub may recreate SessionInputShell (draftRev=0) on re-retain.
-        slot.baselineDraftRev = nextEnv.draftRev
         slot.epochInvalidated = false
         notify()
         return
       }
 
       if (slot.activeAbort !== null) {
-        // Request for this session is still in flight; re-anchor draftRev and wait for it.
-        slot.baselineDraftRev = nextEnv.draftRev
+        // Request for this session is still in flight; wait for it.
+        notify()
+        return
+      }
+
+      if (!isSessionDraftClean(nextEnv)) {
+        // Keep `sawRunning` armed; do not burn the turn just because a draft is present right now.
         notify()
         return
       }
@@ -757,11 +700,6 @@ export function createClientSuggestionMachine(deps) {
       slot.activeSuggestion = null
 
       if (!isSnapshotCleanForSuggestion(nextEnv) || nextEnv.popupOpen) {
-        if (!isSessionDraftClean(nextEnv)) {
-          if (typeof nextEnv.turnHint === 'number') slot.dismissedTurns.add(nextEnv.turnHint)
-          else slot.dismissedTurns.add(UNKNOWN_TURN_KEY)
-        }
-        slot.baselineDraftRev = null
         slot.epochInvalidated = true
         return
       }
@@ -775,14 +713,8 @@ export function createClientSuggestionMachine(deps) {
     const wasInteractive = prevSlotEnv ? isComposerInteractive(prevSlotEnv) : false
     const nowInteractive = isComposerInteractive(nextEnv)
 
-    // 4. Same session remained idle: check if user edited draft (including type-then-delete via draftRev),
-    //    inserted quote/reference chips, submitted, or hit an error; also re-render or backfill on interactivity transitions.
+    // 4. Same session remained idle: draft edits only affect live visibility, never the cached suggestion.
     if (!slot.epochInvalidated) {
-      const draftMutated = slot.baselineDraftRev !== null && nextEnv.draftRev !== slot.baselineDraftRev
-      if (draftMutated || !isSessionDraftClean(nextEnv)) {
-        invalidateSessionTurn(sessionId)
-        return
-      }
       if ((prevEnv && Boolean(prevEnv.popupOpen) !== Boolean(nextEnv.popupOpen))
         || (prevSlotEnv && wasInteractive !== nowInteractive)) {
         notify()
@@ -804,18 +736,6 @@ export function createClientSuggestionMachine(deps) {
   }
 
   /**
-   * Immediately invalidate on raw user edit intent (`beforeinput`, `compositionstart`, `paste`, `drop`),
-   * even if the user later deletes the typed text back to empty.
-   * @param {string | undefined} [sessionId]
-   */
-  function notifyUserEditIntent(sessionId = currentEnv?.sessionId ?? activeSessionId ?? undefined) {
-    if (disposed || !sessionId) return
-    const slot = slots.get(sessionId)
-    if (!slot || slot.epochInvalidated) return
-    invalidateSessionTurn(sessionId)
-  }
-
-  /**
    * Whether the gray ghost preview should currently render and accept Tab/click for the given environment.
    * @param {Record<string, any> | null} [liveEnv]
    * @returns {boolean}
@@ -830,12 +750,6 @@ export function createClientSuggestionMachine(deps) {
     if (typeof env.turnHint === 'number'
       && typeof slot.activeSuggestion.turn === 'number'
       && slot.activeSuggestion.turn !== env.turnHint) {
-      return false
-    }
-    // Enforce same-visit `draftRev` match once synced onto this session.
-    if (activeSessionId === env.sessionId
-      && slot.baselineDraftRev !== null
-      && env.draftRev !== slot.baselineDraftRev) {
       return false
     }
     return true
@@ -871,7 +785,6 @@ export function createClientSuggestionMachine(deps) {
     if (!slot || slot.activeSuggestion === null) return false
 
     const acceptedText = slot.activeSuggestion.text
-    invalidateSessionTurn(env.sessionId)
     context.acceptDraft(acceptedText)
     context.focusEditor?.()
     return true
@@ -879,8 +792,9 @@ export function createClientSuggestionMachine(deps) {
 
   /**
    * Arbitrate a bubble-phase `keydown` event on the composer card.
-   * Only consumes `Tab` (accept) or `Escape` (dismiss) when preview is visible,
+   * Only consumes `Tab` / `ArrowRight` (accept) when preview is visible,
    * the composer editor holds focus, and no prior handler/popup claimed the event.
+   * `Escape` is intentionally left untouched for the host.
    *
    * @param {KeyboardEvent | Record<string, any>} event
    * @param {{
@@ -907,20 +821,12 @@ export function createClientSuggestionMachine(deps) {
 
     if (event.key === 'Tab' || event.key === 'ArrowRight') {
       const isArrow = event.key === 'ArrowRight'
-      // ArrowRight only triggers if composer is empty (draftRev snapshot vs null)
-      // and selection is at the end (prevent accidental trigger while editing).
+      // ArrowRight only triggers when the composer is empty, so it never steals editing navigation.
       if (isArrow && (env.draft !== '' || !context.isEditorFocused)) return false
 
       event.preventDefault?.()
       event.stopPropagation?.()
       return acceptSuggestion(context)
-    }
-
-    if (event.key === 'Escape') {
-      event.preventDefault?.()
-      event.stopPropagation?.()
-      invalidateSessionTurn(env.sessionId)
-      return true
     }
 
     return false
@@ -942,12 +848,10 @@ export function createClientSuggestionMachine(deps) {
     subscribe,
     sync,
     noteSessionRunning,
-    notifyUserEditIntent,
     isPreviewVisible,
     getVisibleSuggestion,
     acceptSuggestion,
     handleKeyDown,
-    invalidateCurrentTurn,
     dispose,
   }
 }

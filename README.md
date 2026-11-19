@@ -19,7 +19,7 @@ When an agent finishes a turn in the active conversation, an empty composer prev
 - **Restrained, exact trigger conditions** — Appears only in the foreground conversation after a normal turn completion (`turn/end` with `reason.kind === 'completed'`) while the composer is editable, Plan Mode is inactive, text/quotes/reference chips/attachments are empty, and no `/` or `@` completion menu or composer takeover is open. Streaming, tool execution, permission prompts, `ask_user_question` waits, disabled/read-only composers, cancellations, and errors are skipped.
 - **Two-step safe acceptance (Keyboard & Click/Touch)** — The gray ghost preview is rendered separately from the Lexical editor value. Press **`Tab`** while the editor holds focus—or click/tap the **`Tab`** badge directly—to convert the preview into an editable draft with the caret at the end, never auto-submitting.
 - **Single-shot, bounded background generation** — Dispatches at most one tool-free `ctx.llm` call per `(sessionId, turn)` using only recent human/assistant text and tool-call counts. Full transcripts, system prompts, reasoning traces, and raw tool outputs are never sent, and nothing is written to the session log.
-- **One-shot invalidation & multi-session isolation** — Suggestions are isolated per `sessionId`: switching to another session hides the previous session's preview (never leaking across sessions), while returning to a clean, unconsumed session restores its suggestion or backfills a turn that just completed in the background (skipping cold historical sessions). Typing, IME composition, pasting, pressing **`Esc`**, deleting back to empty, or starting a new turn permanently invalidates that turn's suggestion.
+- **Non-destructive visibility & multi-session isolation** — Suggestions are isolated per `sessionId`: switching to another session hides the previous session's preview (never leaking across sessions), while returning restores any cached suggestion or backfills a turn that just completed in the background (skipping cold historical sessions). Typing, IME composition, pasting, or adding quotes/attachments only hides the preview; once the composer is empty again the same suggestion reappears without another model request. Only starting a new turn clears it.
 
 ## Installation
 
@@ -49,10 +49,9 @@ dsh plugin --profile web remove dsh-next-step-suggestion
 | --- | --- | --- |
 | Preview visible + composer focused + no popup open | `Tab` / `→` (`ArrowRight`) | Accepts suggestion into editable draft, moves caret to end, does **not** send |
 | Preview visible + no popup open (mouse or touch) | Click / tap `Tab` badge | Accepts suggestion into editable draft, focuses composer, does **not** send |
-| Preview visible + composer focused + no popup open | `Esc` | Dismisses and invalidates the current turn's preview |
 | Preview visible + focus outside composer | `Tab` | Preserves native browser focus traversal |
-| `/` or `@` menu / command popup open, or `Shift+Tab` | `Tab` / `Esc` | Preview hides and yields completely to built-in composer menus |
-| User types, pastes, or accepts then clears back to empty | Any edit | Current turn's suggestion is permanently invalidated until the next turn finishes |
+| `/` or `@` menu / command popup open, or `Shift+Tab` | `Tab` | Preview hides and yields completely to built-in composer menus |
+| User types, pastes, adds quotes/attachments, or accepts then clears back to empty | Any edit | Preview only hides; the same suggestion reappears when the composer becomes empty again, without regenerating |
 
 ## Configuration
 
