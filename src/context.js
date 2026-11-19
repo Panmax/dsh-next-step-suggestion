@@ -20,22 +20,9 @@ const LEADING_LIST_MARKER_RE = /^(?:[-*•]\s+|\d+[.)]\s+)/u
 const ASSISTANT_VOICE_RE = /^(?:需要我|要我|是否需要我|要不要我|我可以帮|我可以继续|请问还需要|would you like me to|do you want me to|shall i\b|should i\b|i can help|let me know if\b|feel free to\b)/iu
 const WAITING_PSEUDO_PROMPT_RE = /^(?:继续等待|等待(?:子代理|子智能体|后台|任务|脚本|审查|结果)|先等(?:待|子代理|后台|一下)|请等待|(?:continue|keep)\s+waiting\b|wait\s+for\s+(?:the\s+)?(?:subagent|agent|background|job|task|review|result)\b)/iu
 // Human-only browser/UI actions may never be delegated back to the agent as a suggestion.
+// This is a defense-in-depth output filter only; the semantic decision is made by the suggestion LLM.
 const MANUAL_UI_ACTION_RE = /(?:硬刷新|刷新(?:一下)?(?:页面|浏览器)|切走.{0,4}切回|切走\s*[/／]\s*切回|点击.{0,8}(?:按钮|链接|页面|图标)|观察(?:界面|页面)|肉眼(?:看|检查|确认)|hard[-\s]?refresh|refresh\s+the\s+(?:page|browser)|switch\s+(?:away|back)|click\s+(?:the|on)\s|visually\s+(?:check|verify|inspect)|observe\s+the\s+(?:ui|page|interface))/iu
-// An assistant reply that asks the human to run a manual UI check and report back.
-const HUMAN_REQUEST_RE = /(?:请你|麻烦你|需要你|你可以|你(?:先|来)|二选一|下一步|把.{0,16}(?:发|告诉|回复)我|告诉我|let\s+me\s+know|please\s+)/iu
-const HUMAN_MANUAL_ACTION_RE = /(?:硬刷新|刷新(?:一下)?(?:页面|浏览器)|切走|切回|点击|点一下|手动(?:测试|验证|检查)?|肉眼|观察(?:界面|页面)?|看看(?:界面|页面|效果)|浏览器|hard[-\s]?refresh|refresh\s+the\s+(?:page|browser)|switch\s+(?:away|back)|click|manually\s+(?:test|verify|check)|in\s+the\s+browser|observe\s+the\s+(?:ui|page|interface))/iu
 const NONE_TOKENS = new Set(['none', 'n/a', 'null', 'nil', '无', '暂无', '没有', '不需要'])
-
-/**
- * Detect whether the assistant's final reply asks the human to perform a manual UI action and report back.
- * The plugin must not turn such a human-only task into a suggestion addressed to the agent.
- * @param {string} assistantText
- * @returns {boolean}
- */
-export function detectAssistantAwaitsHumanAction(assistantText) {
-  if (typeof assistantText !== 'string' || assistantText.length === 0) return false
-  return HUMAN_REQUEST_RE.test(assistantText) && HUMAN_MANUAL_ACTION_RE.test(assistantText)
-}
 
 /**
  * Strip injected `<system-reminder>` blocks and normalize surrounding whitespace.
@@ -252,7 +239,6 @@ export function extractTurnContext(events, maxInputBytes) {
     ranGitPush,
     editedFiles,
   }
-  const assistantAwaitsHumanAction = detectAssistantAwaitsHumanAction(latestAssistantText)
 
   const buildPayload = (prevUser, currUser, reply) => {
     const envelope = {
@@ -261,7 +247,6 @@ export function extractTurnContext(events, maxInputBytes) {
       ...(toolsUsed.length > 0 ? { toolsUsed } : {}),
       ...(toolErrorCount > 0 ? { toolErrorsInTurn: toolErrorCount } : {}),
       toolFeatures,
-      ...(assistantAwaitsHumanAction ? { assistantAwaitsHumanAction: true } : {}),
       assistantFinalReply: reply,
     }
     return `Recent completed turn summary (JSON):\n${JSON.stringify(envelope)}`
@@ -290,7 +275,6 @@ export function extractTurnContext(events, maxInputBytes) {
     eligible: true,
     turn: startTurn,
     promptInput,
-    assistantAwaitsHumanAction,
   }
 }
 

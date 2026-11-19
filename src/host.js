@@ -412,13 +412,6 @@ export function createSuggestionCoordinator(ctx, rawConfig = {}) {
       return { status: 'ineligible', turn, suggestion: null, reason: 'historical-turn' }
     }
 
-    // The assistant asked the human to perform a manual UI check and report back: there is no valid
-    // next user message to predict yet, and a ghost suggestion would preempt the manual verification.
-    if (extracted.assistantAwaitsHumanAction === true) {
-      recordSettled(cacheKey, { sessionId, turn, suggestion: null })
-      return { status: 'none', turn, suggestion: null, reason: 'assistant-awaits-human-action' }
-    }
-
     const llm = getService(ctx, 'llm')
     const route = resolveModelRoute(ctx, agent, config)
     if (!llm || route === null) {
