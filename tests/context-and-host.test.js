@@ -222,6 +222,25 @@ test('parseSuggestionOutput cleans valid user prompts and rejects NONE, slash co
   assert.equal(parseSuggestionOutput('我已硬刷新，麻烦再验证一遍'), null)
 })
 
+test('parseSuggestionOutput rejects direct Chinese refresh instructions and preserves refresh-related bug reports', () => {
+  for (const instruction of [
+    '请刷新页面。',
+    '麻烦刷新一下页面！',
+    '请刷新页面后截图发我',
+    '刷新页面并观察界面',
+  ]) {
+    assert.equal(parseSuggestionOutput(instruction), null, instruction)
+  }
+
+  for (const suggestion of [
+    '刷新页面后测试用例列表为空，请排查',
+    '刷新页面后查看按钮不见了，请补回归',
+    '刷新页面后截图预览为空，请排查',
+  ]) {
+    assert.equal(parseSuggestionOutput(suggestion), suggestion)
+  }
+})
+
 test('manual-verification reply is sent to the suggestion LLM with the NONE rules, and a NONE response yields status none', async () => {
   const manualReply = '下一步（2分钟内）：硬刷新 http://127.0.0.1:3080，然后二选一测试：\n' +
     '- 在 A 发任务后切到 B，等 A 完成再切回 A；\n' +
